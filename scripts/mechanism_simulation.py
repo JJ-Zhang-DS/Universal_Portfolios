@@ -1,0 +1,74 @@
+"""Phase 2: controlled Monte Carlo experiments separating the rebalancing-
+premium effect from Cover's online-learning mechanism.
+
+    python -m scripts.mechanism_simulation [--out-dir results] [--quick]
+
+Runs all three experiments (see universal_portfolio/experiments.py for what
+each isolates), prints summary tables, saves CSVs + charts to --out-dir.
+--quick cuts path counts for a fast smoke-test run (looser confidence
+intervals — use the defaults for anything you'd actually cite).
+"""
+from __future__ import annotations
+
+import argparse
+import os
+
+import pandas as pd
+
+from universal_portfolio.experiments import (
+    drift_difference_sweep,
+    horizon_convergence,
+    rebalancing_premium_sweep,
+)
+from universal_portfolio.plotting import (
+    plot_drift_difference,
+    plot_horizon_convergence,
+    plot_rebalancing_premium,
+)
+
+pd.set_option("display.width", 160)
+pd.set_option("display.float_format", lambda x: f"{x:.4f}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", default="results")
+    parser.add_argument("--quick", action="store_true", help="fewer Monte Carlo paths, for a fast smoke test")
+    args = parser.parse_args()
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    n_paths_main = 2000 if args.quick else 20_000
+    n_paths_up = 500 if args.quick else 5_000
+
+    print("=" * 70)
+    print("Experiment 1: rebalancing premium vs. theory (sigma x rho sweep)")
+    print("=" * 70)
+    exp1 = rebalancing_premium_sweep(n_paths=n_paths_main)
+    print(exp1.to_string(index=False))
+    exp1.to_csv(os.path.join(args.out_dir, "exp1_rebalancing_premium.csv"), index=False)
+    plot_rebalancing_premium(exp1, os.path.join(args.out_dir, "exp1_rebalancing_premium.png"))
+
+    print()
+    print("=" * 70)
+    print("Experiment 2: drift-difference falsification ('permanent loser')")
+    print("=" * 70)
+    exp2 = drift_difference_sweep(n_paths=n_paths_up)
+    print(exp2.to_string(index=False))
+    exp2.to_csv(os.path.join(args.out_dir, "exp2_drift_difference.csv"), index=False)
+    plot_drift_difference(exp2, os.path.join(args.out_dir, "exp2_drift_difference.png"))
+
+    print()
+    print("=" * 70)
+    print("Experiment 3: horizon convergence (Cover's regret bound)")
+    print("=" * 70)
+    exp3 = horizon_convergence(n_paths=n_paths_up)
+    print(exp3.to_string(index=False))
+    exp3.to_csv(os.path.join(args.out_dir, "exp3_horizon_convergence.csv"), index=False)
+    plot_horizon_convergence(exp3, os.path.join(args.out_dir, "exp3_horizon_convergence.png"))
+
+    print()
+    print(f"CSVs and charts written to {args.out_dir}/")
+
+
+if __name__ == "__main__":
+    main()
