@@ -369,6 +369,56 @@ other income/gains that year, versus the real $3,000/yr ordinary-income
 offset cap with carryforward; state tax (e.g. up to ~13.3% top marginal
 in CA) isn't included and would stack on top of every number above.
 
+## Status: Phase 8 — rolling-window robustness check (done)
+
+Phase 5 ran ONE full-period (2016-2026) backtest per pair — a single
+point estimate, from a decade that happened to contain some of the most
+extreme individual-stock winners in market history (NVDA, AMD, TSLA all
+multi-bagged). `rolling_window_backtest` reuses Phase 5's `backtest_pair`
+unchanged, just on overlapping 3-year sub-windows (stepped monthly, 93
+windows per pair — heavily overlapping by design, not 93 independent
+samples; see the function's own docstring) to check whether Phase 5's
+headline finding — "excess vs. the better leg is negative in most
+pairs" — is a robust property of the mechanism or an artifact of this
+one window.
+
+| Pair | Full-period excess vs. better leg | % of rolling windows that beat it | Median rolling excess |
+|---|---|---|---|
+| ISRG/WM | +0.2pp (positive) | 28% | −1.6pp |
+| WM/TSLA | −2.9pp | 24% | −6.5pp |
+| WM/AMD | −12.5pp | 17% | −9.1pp |
+| SPY/GLD | −0.0pp (flat) | 10% | −2.0pp |
+| **NVDA/AMD** | **+1.2pp (positive)** | **3%** | **−10.0pp** |
+| **MSFT/GOOG** | **+0.2pp (positive)** | **3%** | **−2.9pp** |
+| QQQ/TLT | −8.6pp | 1% | −8.8pp |
+
+**The finding is not just confirmed, it's sharpened, and one part of
+Phase 5's read needs correcting.** Every single pair's MEDIAN rolling-
+window result is negative, and no pair beats the better leg in a
+majority of realistic 3-year holding periods — even the least-bad pair
+(ISRG/WM) only clears the bar 28% of the time. But look at the two bolded
+rows: NVDA/AMD and MSFT/GOOG were the two pairs Phase 5 flagged as
+genuine wins (positive full-period excess). Rolling windows show they
+beat the better leg in only **3% of 3-year periods each**, with medians
+of −10.0pp and −2.9pp. The full-period "win" for both was a real number,
+correctly computed, but not remotely representative of what most 3-year
+holders of that pair over this decade actually experienced — it was
+being driven by the specific start/end points of the one window tested.
+
+The NVDA/AMD time series makes this unambiguous: rolling excess ranges
+from roughly +2pp down to **−29pp**, spending most of 2018-2023 firmly
+negative (often below −15pp), and only turns positive in the handful of
+3-year windows ending in the most recent AI-driven rally. The full-period
+number landed in exactly that narrow favorable tail. QQQ/TLT, by
+contrast, is consistently negative across nearly the entire decade —
+that finding was never fragile to begin with, and this confirms it.
+
+**Practical upshot**: don't trust a single full-period backtest for a
+pair-rebalancing decision, even a real, honestly-computed one — check
+the rolling distribution first. A number that looks good over one
+specific decade can be almost entirely a function of where that decade
+happened to start and end.
+
 ## Layout
 
 - `universal_portfolio/cover.py` — Phase 1: the reference algorithm (`cover_universal_2asset`), single-path, no external data dependency.
@@ -378,18 +428,18 @@ in CA) isn't included and would stack on top of every number above.
 - `universal_portfolio/costs.py` — Phase 4: sourced commission + effective-spread assumptions by vendor and liquidity tier; the `crisis` flag and `CRISIS_SPREAD_MULTIPLIER` (defined here since Phase 4, first actually used in Phase 6).
 - `universal_portfolio/taxes.py` — Phase 7: the realization-vs-wash-sale explanation, and sourced 2026 short-term/long-term/NIIT rate scenarios.
 - `universal_portfolio/market_data.py` — Phase 5: real price fetch/cache (`yfinance`) + conversion to the same price-relative convention used throughout.
-- `universal_portfolio/real_data_experiments.py` — Phase 5: pair backtests + rolling correlation on real data, reusing Phase 2-4's `strategies.py` functions with `n_paths=1` instead of a Monte Carlo batch.
+- `universal_portfolio/real_data_experiments.py` — Phase 5: pair backtests + rolling correlation on real data, reusing Phase 2-4's `strategies.py` functions with `n_paths=1` instead of a Monte Carlo batch. Phase 8: `rolling_window_backtest`/`rolling_window_summary`, repeating `backtest_pair` over overlapping sub-windows instead of the one full period.
 - `universal_portfolio/experiments.py` — Phases 2-4, 6, and 7: the synthetic-data experiments, as pure functions returning DataFrames.
 - `universal_portfolio/plotting.py` — chart rendering.
 - `scripts/replicate_cover1991.py`, `scripts/mechanism_simulation.py`, `scripts/real_data_backtest.py` — CLI entry points.
 - `tests/test_cover_replication.py` — Phase 1 tests: exact-number replication, the `universal wealth == mean(CRP wealth)` algebraic identity (true by construction, so it's what actually catches indexing/look-ahead bugs), a cross-check against `universal-portfolios`' own BCRP optimizer.
 - `tests/test_strategies.py` — Phase 2-4, 6, 7 tests: batched implementation vs. Phase 1's single-path reference, the same algebraic identity batched, `BCRP ≥ Universal Portfolio` always (also algebraic, not empirical), GBM simulator calibration (including per-regime calibration), drawdown correctness on hand-constructed paths, Phase 4's cost/frequency mechanics (including a caught-by-testing subtlety: rebalancing frequency changes the underlying wealth process even at zero cost, since the weight drifts between rebalances — cost and "structural" frequency effects had to be tested separately, not conflated), Phase 6's array-valued cost (a constant array must reproduce the scalar exactly; a cost confined to a sub-window must leave the path untouched before that window starts), and Phase 7's tax mechanics (a hand-computed 2-day example verifying the realized-gain arithmetic; a caught-by-testing subtlety of its own — unlike Phase 4's cost, which is always >=0, a realized LOSS gives a tax rebate under this model's full-offset assumption, so "tax reduces wealth" only holds on AVERAGE across paths, not on every individual path, and the test had to be corrected to check the mean, not `np.all`).
-- `tests/test_real_data.py` — Phase 5 tests: sane price-relative bounds (loose on purpose — AMD alone had a real +52%/-24% single day in this window), BCRP ≥ fixed CRP and costed ≤ frictionless on real data, theory-vs-reality direction/scale, rolling correlation stays in [-1, 1]. Needs a local cache or network access; skips (doesn't fail) if neither is available, since Phase 5 is inherently network-dependent in a way Phases 1-4 aren't.
+- `tests/test_real_data.py` — Phase 5 tests: sane price-relative bounds (loose on purpose — AMD alone had a real +52%/-24% single day in this window), BCRP ≥ fixed CRP and costed ≤ frictionless on real data, theory-vs-reality direction/scale, rolling correlation stays in [-1, 1]. Needs a local cache or network access; skips (doesn't fail) if neither is available, since Phase 5 is inherently network-dependent in a way Phases 1-4 aren't. Phase 8 tests: rolling-window mechanics (one row per window per pair, correct window length, per-window internal consistency) and that the summary's aggregates match recomputing them directly from the raw rolling output.
 
 ## Planned next phases
 
 Not yet implemented:
 
-1. **Rolling-window out-of-sample** — Phase 5 used one full-period backtest per pair; walk-forward across rolling 3-5y windows would show how much the conclusions there depend on the specific 2016-2026 window (particularly the "excess vs. better leg" finding, which is plausibly period-specific to a decade with unusually extreme individual winners).
-2. **Combine Phase 7 with real data** — Phase 5's real pairs, taxed like Phase 7, instead of Phase 7's synthetic calm-regime GBM; tax drag on a pair with a persistent-winner dynamic (Phase 5's WM/AMD) is plausibly worse than the symmetric-drift case modeled here, since trimming the winner back to target realizes a gain every time.
-3. **Exact lot accounting** — replace Phase 7's average-cost-basis/scenario-rate simplifications with real FIFO or specific-ID lot tracking and per-lot holding periods, closing the short-term/long-term gap the current model treats as a scenario choice rather than a derived quantity.
+1. **Combine Phase 7 with real data** — Phase 5/8's real pairs, taxed like Phase 7, instead of Phase 7's synthetic calm-regime GBM; tax drag on a pair with a persistent-winner dynamic (Phase 5's WM/AMD, or NVDA/AMD per Phase 8's finding that it's a persistent-winner pair most of the time) is plausibly worse than the symmetric-drift case modeled in Phase 7, since trimming the winner back to target realizes a gain nearly every rebalance.
+2. **Exact lot accounting** — replace Phase 7's average-cost-basis/scenario-rate simplifications with real FIFO or specific-ID lot tracking and per-lot holding periods, closing the short-term/long-term gap the current model treats as a scenario choice rather than a derived quantity.
+3. **Why does the rolling window bounce so hard around 2020-2022 for NVDA/AMD?** Phase 8 shows the swing (roughly +2pp to -29pp) but doesn't decompose it — plausibly some mix of the 2022 semiconductor selloff and shifting relative correlation/vol between the two names, not investigated here.

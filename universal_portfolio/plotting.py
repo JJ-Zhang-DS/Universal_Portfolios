@@ -535,3 +535,73 @@ def plot_tax_drag(df: pd.DataFrame, path: str) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_rolling_window_timeseries(df: pd.DataFrame, full_period: pd.DataFrame, pairs: list[str], path: str) -> None:
+    """Rolling-window excess vs. the better leg, over time, for a few
+    selected pairs -- each pair's Phase 5 full-period number (a single
+    point) is a dashed horizontal reference line, so it's visible how
+    much of the distribution that one point actually represents.
+    """
+    colors = [BLUE, ORANGE, AQUA, YELLOW]
+    fig, ax = plt.subplots(figsize=(10, 5.2), facecolor=SURFACE)
+    entries = []
+    full_lookup = full_period.set_index("pair")["excess_vs_better_leg"]
+
+    for pair, color in zip(pairs, colors):
+        sub = df[df["pair"] == pair].sort_values("window_start").copy()
+        sub["window_start"] = pd.to_datetime(sub["window_start"])
+        ax.plot(sub["window_start"], sub["excess_vs_better_leg"] * 100, color=color, linewidth=2, zorder=3)
+        ax.axhline(full_lookup.loc[pair] * 100, color=color, linewidth=1.2, linestyle=(0, (3, 2)), zorder=2)
+        entries.append((sub["window_start"].iloc[-1], sub["excess_vs_better_leg"].iloc[-1] * 100, pair, color))
+
+    ax.axhline(0, color=BASELINE, linewidth=1)
+    _place_end_labels(ax, entries)
+
+    ax.set_title(
+        "Rolling 3-year excess vs. the better leg over time\n(dashed = each pair's Phase 5 single full-period number)",
+        fontsize=10, color=INK_PRIMARY, loc="left",
+    )
+    ax.set_ylabel("excess vs. better leg (pp/yr, annualized)", fontsize=9, color=INK_SECONDARY)
+    _style_axes(ax)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_rolling_window_summary(df: pd.DataFrame, path: str) -> None:
+    """Bar chart: % of rolling 3-year windows where 50/50 rebalancing
+    beat the better leg, per pair. (Each pair's Phase 5 single full-
+    period number lives in plot_rolling_window_timeseries's reference
+    lines and the CSV -- cramming it onto this chart too, directly above
+    the x-tick labels, collided with them; one clean comparison per chart
+    reads better than two fighting for the same space.)
+    """
+    df = df.sort_values("pct_windows_beats_better_leg", ascending=False)
+    x = np.arange(len(df))
+
+    fig, ax = plt.subplots(figsize=(9, 5.2), facecolor=SURFACE)
+    ax.bar(x, df["pct_windows_beats_better_leg"].values * 100, 0.55, color=BLUE, zorder=3)
+
+    for xi, pct in zip(x, df["pct_windows_beats_better_leg"]):
+        ax.annotate(f"{pct * 100:.0f}%", xy=(xi, pct * 100), xytext=(0, 4), textcoords="offset points",
+                    ha="center", fontsize=9.5, color=INK_SECONDARY)
+
+    ax.axhline(50, color=BASELINE, linewidth=1, linestyle=(0, (3, 2)))
+    ax.annotate("50% of windows", xy=(len(df) - 0.4, 50), xytext=(0, 4), textcoords="offset points",
+                fontsize=8, color=INK_MUTED, ha="right")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(df["pair"], fontsize=9, color=INK_SECONDARY)
+    ax.set_ylim(0, max(60, df["pct_windows_beats_better_leg"].max() * 100 + 10))
+    ax.set_title(
+        "% of rolling 3-year windows where 50/50 CRP beat the better leg\n(no pair clears 50% in the majority of realistic holding periods)",
+        fontsize=10, color=INK_PRIMARY, loc="left",
+    )
+    ax.set_ylabel("% of windows", fontsize=9, color=INK_SECONDARY)
+    _style_axes(ax)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)

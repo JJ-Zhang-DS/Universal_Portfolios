@@ -115,3 +115,60 @@ def rolling_correlation(ticker0: str, ticker1: str, window: int = 60) -> pd.Seri
     """
     log_r = np.log(price_relatives([ticker0, ticker1]))
     return log_r[ticker0].rolling(window).corr(log_r[ticker1])
+
+
+def rolling_window_backtest(pairs=PAIRS, window_years: float = 3.0, step_days: int = 21) -> pd.DataFrame:
+    """Phase 8: repeat backtest_pair over overlapping rolling windows
+    instead of the single 2016-2026 full period, to check whether Phase
+    5's conclusions -- especially "excess vs. the better leg is negative
+    in most pairs" -- are a robust property of the mechanism or an
+    artifact of this specific decade (which happened to contain some of
+    the most extreme individual-stock winners in market history: NVDA,
+    AMD, TSLA all multi-bagged). Reuses backtest_pair unchanged, just on
+    different date slices -- same metrics, same definitions, so every
+    window's numbers are directly comparable to Phase 5's single-window
+    ones and to each other.
+
+    :param window_years: length of each backtest window.
+    :param step_days: how far consecutive windows' start dates are
+        offset -- windows overlap heavily by design (a 3y window stepped
+        21 days is >99% overlapping with its neighbor), because the goal
+        is a smooth picture of how the metric evolves, not independent
+        samples. Don't treat window count as an effective sample size.
+    """
+    prices = price_relatives()
+    window_days = int(window_years * TRADING_DAYS_PER_YEAR)
+    n_total = len(prices)
+
+    rows = []
+    for start in range(0, n_total - window_days + 1, step_days):
+        window = prices.iloc[start : start + window_days]
+        for t0, t1 in pairs:
+            result = backtest_pair(t0, t1, window)
+            result["window_start"] = window.index[0]
+            result["window_end"] = window.index[-1]
+            rows.append(result)
+    return pd.DataFrame(rows)
+
+
+def rolling_window_summary(df: pd.DataFrame, full_period: pd.DataFrame) -> pd.DataFrame:
+    """Per-pair: how often, and by how much, would 50/50 rebalancing have
+    beaten the better leg across all rolling windows -- versus the single
+    full-period number Phase 5 reported, included here for direct
+    comparison against the distribution it was drawn from.
+    """
+    full = full_period.set_index("pair")["excess_vs_better_leg"]
+    rows = []
+    for pair, g in df.groupby("pair", sort=False):
+        rows.append(
+            {
+                "pair": pair,
+                "n_windows": len(g),
+                "full_period_excess_vs_better_leg": full.loc[pair],
+                "pct_windows_beats_better_leg": (g["excess_vs_better_leg"] > 0).mean(),
+                "median_excess_vs_better_leg": g["excess_vs_better_leg"].median(),
+                "worst_window_excess_vs_better_leg": g["excess_vs_better_leg"].min(),
+                "best_window_excess_vs_better_leg": g["excess_vs_better_leg"].max(),
+            }
+        )
+    return pd.DataFrame(rows).set_index("pair").loc[[p for p in full.index if p in df["pair"].unique()]].reset_index()
