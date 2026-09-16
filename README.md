@@ -194,6 +194,74 @@ almost certainly a far larger cost than the bid-ask spread for a real
 investor, and entirely out of scope here (this phase covers execution
 cost, not tax drag).
 
+## Status: Phase 5 — modern out-of-sample (done)
+
+Phases 1-4 are synthetic or academic-historical. Phase 5 uses real daily
+prices, 2016-2026 (`yfinance`, auto-adjusted for splits/dividends —
+confirmed directly: no discontinuity around NVDA's June 2024 10:1 split),
+for 4 ETFs (SPY, QQQ, GLD, TLT) and 7 stocks spanning very different
+correlation structure: same-sector pairs expected to run hot (NVDA/AMD,
+MSFT/GOOG) vs. pairs anchored by WM (Waste Management — about as low-vol,
+low-correlation-to-growth a stock as exists in the US market) vs.
+ISRG. **This is fundamentally different evidence from Phases 2-4**: each
+pair has exactly one realized historical path, not thousands of Monte
+Carlo draws — there's no standard error, and a different decade could
+look different. Treat it as an out-of-sample check on the mechanism, not
+independent statistical proof.
+
+```bash
+python -m scripts.real_data_backtest   # writes CSV + charts to results/ (gitignored)
+```
+
+Realized full-period correlation and volatility already tell most of the
+story:
+
+| Pair | ρ (realized) | σ (leg 0 / leg 1) |
+|---|---|---|
+| SPY / GLD | 0.08 | 18% / 16% |
+| QQQ / TLT | −0.10 | 22% / 15% |
+| NVDA / AMD | 0.60 | 49% / 59% |
+| MSFT / GOOG | 0.65 | 27% / 29% |
+| WM / TSLA | 0.11 | 19% / 58% |
+| WM / AMD | 0.13 | 19% / 59% |
+| ISRG / WM | 0.36 | 32% / 19% |
+
+**1. The ¼σ²(1−ρ) formula survives contact with real, non-lognormal,
+autocorrelated market data** — realized excess-vs-average-leg tracks the
+theoretical prediction within ~10% for 5 of 7 pairs (e.g. SPY/GLD:
+predicted 67bps/yr, realized 68bps/yr). It's the two most extreme-vol
+pairs (WM/TSLA, WM/AMD, both with a 58-59% vol leg) where the small-vol
+continuous-time approximation starts to underestimate reality by
+~100bps/yr — a real, if modest, breakdown at extreme volatility, not
+just a synthetic-GBM artifact.
+
+**2. Excess vs. the better leg — the bar that actually matters — is
+negative in 3 of 7 pairs, and dramatically so in two**: QQQ/TLT at
+**−861bps/yr** and WM/AMD at **−1249bps/yr**. Both are the same
+mechanism Phase 2 warned about in the abstract, now with real tickers and
+real numbers: TLT was a persistent loser over this decade (bonds'
+2020-2023 bear market, annualized −1.0%/yr) and AMD was an extraordinary
+persistent winner (+49.1%/yr, the AI/semiconductor supercycle) — BCRP's
+hindsight weight is 100% QQQ and 0% WM respectively, i.e. *no* fixed
+blend beats concentration when one leg dominates this completely. Only
+NVDA/AMD, MSFT/GOOG, and ISRG/WM (the three pairs with the smallest
+drift gaps between legs) show positive excess vs. the better leg.
+**Read this as "2016-2026 had unusually extreme individual winners," not
+"diversification is bad"** — a decade with more balanced leg returns
+would look different, which is exactly Phase 2's drift-difference result
+playing out in a real, specific, non-hypothetical period.
+
+**3. Correlation regime shift, confirmed directly in real data, with a
+sharper nuance than Phase 3's synthetic version**: 60-day rolling QQQ/TLT
+correlation swings from −0.67 to +0.54 over the decade. During the 2020
+COVID crash it went *more negative* (−0.53, flight-to-quality — bonds
+rallied while stocks crashed, a "good crisis" for this pair); during the
+2022 rate-hike selloff it *flipped positive* (stocks and bonds fell
+together, since the shock was rates/inflation, not growth). **Whether a
+crisis breaks a diversifying pair depends on the crisis's cause, not just
+its existence** — a real refinement Phase 3's single "crisis regime"
+couldn't show.
+
 ## Layout
 
 - `universal_portfolio/cover.py` — Phase 1: the reference algorithm (`cover_universal_2asset`), single-path, no external data dependency.
@@ -201,15 +269,18 @@ cost, not tax drag).
 - `universal_portfolio/simulate.py` — Phase 2: correlated-GBM path generator; Phase 3: `Regime` + `simulate_regime_switching_gbm` for piecewise-constant-parameter paths.
 - `universal_portfolio/strategies.py` — Phase 2: the same algorithms as `cover.py`, vectorized across simulation paths (log-wealth space throughout, for numerical stability at 20-year/60%-vol horizons); cross-checked against `cover.py` in tests. Phase 3: `*_path` variants that expose the full trajectory (not just final wealth) + `max_drawdown_from_log_wealth_path`. Phase 4: `cost_bps`/`rebalance_every` on the fixed-CRP and Universal Portfolio path functions.
 - `universal_portfolio/costs.py` — Phase 4: sourced commission + effective-spread assumptions by vendor and liquidity tier.
-- `universal_portfolio/experiments.py` — Phases 2-4: the experiments above, as pure functions returning DataFrames.
+- `universal_portfolio/market_data.py` — Phase 5: real price fetch/cache (`yfinance`) + conversion to the same price-relative convention used throughout.
+- `universal_portfolio/real_data_experiments.py` — Phase 5: pair backtests + rolling correlation on real data, reusing Phase 2-4's `strategies.py` functions with `n_paths=1` instead of a Monte Carlo batch.
+- `universal_portfolio/experiments.py` — Phases 2-4: the synthetic-data experiments, as pure functions returning DataFrames.
 - `universal_portfolio/plotting.py` — chart rendering.
-- `scripts/replicate_cover1991.py`, `scripts/mechanism_simulation.py` — CLI entry points.
+- `scripts/replicate_cover1991.py`, `scripts/mechanism_simulation.py`, `scripts/real_data_backtest.py` — CLI entry points.
 - `tests/test_cover_replication.py` — Phase 1 tests: exact-number replication, the `universal wealth == mean(CRP wealth)` algebraic identity (true by construction, so it's what actually catches indexing/look-ahead bugs), a cross-check against `universal-portfolios`' own BCRP optimizer.
 - `tests/test_strategies.py` — Phase 2-4 tests: batched implementation vs. Phase 1's single-path reference, the same algebraic identity batched, `BCRP ≥ Universal Portfolio` always (also algebraic, not empirical), GBM simulator calibration (including per-regime calibration), drawdown correctness on hand-constructed paths, and Phase 4's cost/frequency mechanics (including a caught-by-testing subtlety: rebalancing frequency changes the underlying wealth process even at zero cost, since the weight drifts between rebalances — cost and "structural" frequency effects had to be tested separately, not conflated).
+- `tests/test_real_data.py` — Phase 5 tests: sane price-relative bounds (loose on purpose — AMD alone had a real +52%/-24% single day in this window), BCRP ≥ fixed CRP and costed ≤ frictionless on real data, theory-vs-reality direction/scale, rolling correlation stays in [-1, 1]. Needs a local cache or network access; skips (doesn't fail) if neither is available, since Phase 5 is inherently network-dependent in a way Phases 1-4 aren't.
 
 ## Planned next phases
 
 Not yet implemented:
 
 1. **Crisis-regime cost interaction** — combine Phase 3's spread-widening-in-a-crisis intuition with Phase 4's cost model quantitatively, rather than as a qualitative caveat.
-2. **Modern out-of-sample** — real ETF pairs. Important caveat given Phases 2-3's results: candidates must be genuinely weakly/negatively correlated (e.g. equity+duration or equity+gold), not two single-name growth stocks, and *especially* not two tickers both carrying US-equity-market beta — correlation between those tends toward 1 exactly when it matters most (drawdowns, per Phase 3), which is precisely where Phase 3 shows rebalancing gets hurt worst.
+2. **Rolling-window out-of-sample** — Phase 5 used one full-period backtest per pair; walk-forward across rolling 3-5y windows would show how much the conclusions above depend on the specific 2016-2026 window (particularly finding 2, which is plausibly period-specific).

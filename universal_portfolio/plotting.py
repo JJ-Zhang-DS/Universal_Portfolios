@@ -328,3 +328,86 @@ def plot_transaction_costs(df_etf: pd.DataFrame, df_stock: pd.DataFrame, path: s
     fig.tight_layout(rect=(0, 0, 1, 0.90))
     fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_real_pair_results(df: pd.DataFrame, path: str) -> None:
+    """Two panels, both x=pair (sorted by realized correlation, low to
+    high): (1) actual vs. theory excess growth vs. the average leg --
+    does Phase 2's closed-form formula survive contact with real,
+    non-lognormal, non-stationary market data; (2) excess vs. the BETTER
+    leg -- the practically relevant, much harder bar, on real pairs
+    instead of synthetic ones.
+    """
+    df = df.sort_values("realized_rho")
+    pairs = df["pair"].tolist()
+    x = np.arange(len(pairs))
+    width = 0.32
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12.5, 5), facecolor=SURFACE)
+
+    ax1.bar(x - width / 2, df["excess_vs_avg_leg"] * 1e4, width, color=BLUE, zorder=3)
+    ax1.bar(x + width / 2, df["theory_excess_vs_avg_leg"] * 1e4, width, color=ORANGE, zorder=3)
+    ax1.axhline(0, color=BASELINE, linewidth=1)
+    ax1.set_title(
+        "Actual vs. theory excess growth (vs. average leg)\nsolid = realized 2016-2026, orange = ¼σ²(1−ρ) prediction",
+        fontsize=10, color=INK_PRIMARY, loc="left",
+    )
+    ax1.set_ylabel("annualized excess (bps)", fontsize=9, color=INK_SECONDARY)
+    handles1 = [plt.Line2D([0], [0], color=BLUE, lw=6), plt.Line2D([0], [0], color=ORANGE, lw=6)]
+    ax1.legend(handles1, ["realized", "theory"], loc="upper left", frameon=False, fontsize=8.5, labelcolor=INK_SECONDARY)
+
+    ax2.bar(x, df["excess_vs_better_leg"] * 1e4, width * 1.6, color=BLUE, zorder=3)
+    ax2.axhline(0, color=BASELINE, linewidth=1)
+    ax2.set_title(
+        "Excess vs. the BETTER leg\n(the bar an investor actually faces, not the average)",
+        fontsize=10, color=INK_PRIMARY, loc="left",
+    )
+    ax2.set_ylabel("annualized excess (bps)", fontsize=9, color=INK_SECONDARY)
+
+    for ax in (ax1, ax2):
+        ax.set_xticks(x)
+        ax.set_xticklabels(pairs, fontsize=8.5, color=INK_SECONDARY, rotation=30, ha="right")
+        _style_axes(ax)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_rolling_correlation(series: dict[str, "pd.Series"], path: str, highlight: list[tuple] = ()) -> None:
+    """Rolling realized correlation over time for one or more pairs, with
+    shaded spans over named historical windows (e.g. the 2020 COVID crash,
+    the 2022 rate-hike selloff) -- the real-data counterpart to Phase 3's
+    synthetic correlation regime shift.
+
+    :param series: {label: pandas Series of rolling correlation, DatetimeIndex}.
+    :param highlight: list of (start, end, label) to shade.
+    """
+    colors = [BLUE, ORANGE, AQUA, YELLOW]
+    fig, ax = plt.subplots(figsize=(10, 4.8), facecolor=SURFACE)
+
+    for (start, end, label) in highlight:
+        ax.axvspan(pd.Timestamp(start), pd.Timestamp(end), color=GRIDLINE, zorder=1)
+        ax.annotate(
+            label, xy=(pd.Timestamp(start), 1.0), xytext=(3, -3), textcoords="offset points",
+            fontsize=8, color=INK_MUTED, va="top",
+        )
+
+    entries = []
+    for (label, s), color in zip(series.items(), colors):
+        s = s.dropna()
+        ax.plot(s.index, s.values, color=color, linewidth=1.5, zorder=3)
+        entries.append((s.index[-1], s.values[-1], label, color))
+
+    ax.axhline(0, color=BASELINE, linewidth=1)
+    ax.set_ylim(-1.0, 1.05)
+    ax.set_title("60-day rolling realized correlation", fontsize=10, color=INK_PRIMARY, loc="left")
+    ax.set_ylabel("correlation", fontsize=9, color=INK_SECONDARY)
+    _style_axes(ax)
+
+    handles = [plt.Line2D([0], [0], color=c, lw=2) for _, c in zip(series, colors)]
+    ax.legend(handles, list(series.keys()), loc="lower left", frameon=False, fontsize=9, labelcolor=INK_SECONDARY)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)
