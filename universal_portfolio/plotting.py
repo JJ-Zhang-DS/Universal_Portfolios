@@ -411,3 +411,74 @@ def plot_rolling_correlation(series: dict[str, "pd.Series"], path: str, highligh
     fig.tight_layout()
     fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_crisis_cost_interaction(df: pd.DataFrame, path: str) -> None:
+    """Grouped bars: how much Phase 4's naive constant-cost assumption
+    understates the true cost once the spread is allowed to widen during
+    Phase 3's crisis window, by rebalancing frequency and liquidity tier.
+    """
+    freq_order = ["daily", "weekly", "monthly"]
+    etf = df[df["tier"] == "mega_liquid_etf"].set_index("frequency").loc[freq_order, "naive_understatement_bps"]
+    stock = df[df["tier"] == "single_stock"].set_index("frequency").loc[freq_order, "naive_understatement_bps"]
+
+    x = np.arange(len(freq_order))
+    width = 0.32
+    fig, ax = plt.subplots(figsize=(7.5, 5), facecolor=SURFACE)
+
+    ax.bar(x - width / 2, etf.values, width, color=BLUE, zorder=3)
+    ax.bar(x + width / 2, stock.values, width, color=ORANGE, zorder=3)
+
+    for xi, v in zip(x - width / 2, etf.values):
+        ax.annotate(f"{v:.2f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                    ha="center", fontsize=8.5, color=INK_SECONDARY)
+    for xi, v in zip(x + width / 2, stock.values):
+        ax.annotate(f"{v:.2f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                    ha="center", fontsize=8.5, color=INK_SECONDARY)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(freq_order, fontsize=9, color=INK_SECONDARY)
+    ax.set_title(
+        "Cost UNDERSTATEMENT from assuming calm-regime spread\nthroughout a crisis window (vs. 3x wider during it)",
+        fontsize=10, color=INK_PRIMARY, loc="left",
+    )
+    ax.set_ylabel("naive understatement (bps/yr)", fontsize=9, color=INK_SECONDARY)
+    _style_axes(ax)
+
+    handles = [plt.Line2D([0], [0], color=BLUE, lw=6), plt.Line2D([0], [0], color=ORANGE, lw=6)]
+    ax.legend(handles, ["mega-liquid ETF", "single stock"], loc="upper right", frameon=False,
+              fontsize=9, labelcolor=INK_SECONDARY)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_crisis_multiplier_sensitivity(df: pd.DataFrame, path: str) -> None:
+    """Line chart: does the (stylized, not fitted) crisis spread-widening
+    multiplier itself matter much -- swept 1x (no widening) to 10x, at
+    daily rebalancing, both liquidity tiers.
+    """
+    fig, ax = plt.subplots(figsize=(7.5, 5), facecolor=SURFACE)
+    entries = []
+
+    for tier, color in [("mega_liquid_etf", BLUE), ("single_stock", ORANGE)]:
+        sub = df[df["tier"] == tier].sort_values("crisis_multiplier")
+        ax.plot(sub["crisis_multiplier"], sub["drag_vs_frictionless_bps"], color=color, linewidth=2,
+                marker="o", markersize=6, zorder=3)
+        entries.append((sub["crisis_multiplier"].iloc[-1], sub["drag_vs_frictionless_bps"].iloc[-1], tier, color))
+
+    _place_end_labels(ax, [(x, y, {"mega_liquid_etf": "mega-liquid ETF", "single_stock": "single stock"}[t], c) for x, y, t, c in entries])
+
+    ax.set_title(
+        "Total cost drag vs. the crisis spread-widening multiplier\n(1x = no widening at all; 3x is this repo's base assumption)",
+        fontsize=10, color=INK_PRIMARY, loc="left",
+    )
+    ax.set_xlabel("crisis spread-widening multiplier", fontsize=9, color=INK_SECONDARY)
+    ax.set_ylabel("drag vs. frictionless (bps/yr)", fontsize=9, color=INK_SECONDARY)
+    ax.set_xlim(0.5, 12)
+    _style_axes(ax)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)

@@ -41,7 +41,7 @@ def fixed_crp_log_wealth(X: np.ndarray, b: float) -> np.ndarray:
 
 
 def fixed_crp_log_wealth_path(
-    X: np.ndarray, b: float, cost_bps: float = 0.0, rebalance_every: int = 1
+    X: np.ndarray, b: float, cost_bps: float | np.ndarray = 0.0, rebalance_every: int = 1
 ) -> np.ndarray:
     """Same as `fixed_crp_log_wealth` but returns the full cumulative
     log-wealth trajectory instead of just the final value — needed for
@@ -50,21 +50,26 @@ def fixed_crp_log_wealth_path(
 
     :param cost_bps: one-way turnover cost in basis points (see costs.py),
         charged at each rebalance on |target_weight b - drifted_weight|.
-        0 (default) reproduces the frictionless Phase 2/3 behavior exactly.
+        Either a scalar (constant throughout) or an array of length
+        n_days (Phase 6: e.g. wider during a crisis window, narrower
+        outside it — see costs.spread_cost_bps's `crisis` flag). 0
+        (default) reproduces the frictionless Phase 2/3 behavior exactly.
     :param rebalance_every: rebalance to `b` every N days; the weight
         drifts with realized returns in between. 1 (default) = daily,
         matching Phase 2/3.
     :returns: shape (n_paths, n_days).
     """
-    if cost_bps == 0.0 and rebalance_every == 1:
+    n_days = X.shape[1]
+    cost_bps_arr = np.broadcast_to(np.asarray(cost_bps, dtype=float), (n_days,))
+
+    if np.all(cost_bps_arr == 0.0) and rebalance_every == 1:
         growth = b * X[:, :, 0] + (1 - b) * X[:, :, 1]
         return np.log(growth).cumsum(axis=1)
 
-    n_paths, n_days, _ = X.shape
+    n_paths = X.shape[0]
     w = np.full(n_paths, b)
     log_wealth_path = np.empty((n_paths, n_days))
     running = np.zeros(n_paths)
-    cost_frac = cost_bps / 10_000.0
 
     for t in range(n_days):
         x0, x1 = X[:, t, 0], X[:, t, 1]
@@ -74,6 +79,7 @@ def fixed_crp_log_wealth_path(
 
         if t % rebalance_every == rebalance_every - 1:
             turnover = np.abs(b - w)
+            cost_frac = cost_bps_arr[t] / 10_000.0
             running = running + np.log(np.maximum(1 - cost_frac * turnover, 1e-6))
             w = np.full(n_paths, b)
 
@@ -125,7 +131,7 @@ def bcrp_grid(X: np.ndarray, grid_size: int = 21) -> BCRPResult:
 
 
 def universal_portfolio_log_wealth(
-    X: np.ndarray, grid_size: int = 21, full_path: bool = False, cost_bps: float = 0.0
+    X: np.ndarray, grid_size: int = 21, full_path: bool = False, cost_bps: float | np.ndarray = 0.0
 ) -> np.ndarray:
     """Cover's Universal Portfolio, vectorized across paths.
 
@@ -142,14 +148,16 @@ def universal_portfolio_log_wealth(
         charged daily on |b_hat_t - drifted_weight| (UP's target weight
         changes every day by construction, so "rebalancing frequency"
         isn't a separate lever here the way it is for a fixed CRP — see
-        README). 0 (default) reproduces the frictionless Phase 1-3
-        behavior exactly. No cost on day 0 (initial allocation from cash,
-        not a trade against an existing position).
+        README). Either a scalar or an array of length n_days (Phase 6:
+        time-varying, e.g. wider during a crisis window). 0 (default)
+        reproduces the frictionless Phase 1-3 behavior exactly. No cost
+        on day 0 (initial allocation from cash, not a trade against an
+        existing position).
     :returns: shape (n_paths,), or (n_paths, n_days) if `full_path`.
     """
     n_paths, n_days, _ = X.shape
     b_grid = np.linspace(0.0, 1.0, grid_size)
-    cost_frac = cost_bps / 10_000.0
+    cost_frac_arr = np.broadcast_to(np.asarray(cost_bps, dtype=float), (n_days,)) / 10_000.0
 
     log_crp_wealth = np.zeros((n_paths, grid_size))
     log_universal_wealth_path = np.empty((n_paths, n_days))
@@ -164,9 +172,9 @@ def universal_portfolio_log_wealth(
         prob = w / w.sum(axis=1, keepdims=True)
         b_hat = (prob * b_grid).sum(axis=1)
 
-        if cost_frac and w_drifted is not None:
+        if cost_frac_arr[t] and w_drifted is not None:
             turnover = np.abs(b_hat - w_drifted)
-            running = running + np.log(np.maximum(1 - cost_frac * turnover, 1e-6))
+            running = running + np.log(np.maximum(1 - cost_frac_arr[t] * turnover, 1e-6))
 
         x0, x1 = X[:, t, 0], X[:, t, 1]
         gross = b_hat * x0 + (1 - b_hat) * x1

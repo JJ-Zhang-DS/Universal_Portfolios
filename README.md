@@ -262,25 +262,61 @@ crisis breaks a diversifying pair depends on the crisis's cause, not just
 its existence** — a real refinement Phase 3's single "crisis regime"
 couldn't show.
 
+## Status: Phase 6 — crisis-regime cost interaction (done)
+
+Phase 4's cost model and Phase 3's crisis regime were built independently
+and never combined: Phase 4 charged a *constant* spread throughout,
+including across a crisis window, even though wider spreads under stress
+are well-documented (market makers demand more compensation for
+adverse-selection/inventory risk). `costs.CRISIS_SPREAD_MULTIPLIER` (3x)
+existed since Phase 4 but no experiment had ever exercised it. This phase
+splices Phase 4's cost model onto Phase 3's calm→crisis→calm path, with
+the spread 3x wider *only* during the crisis window, `n_paths=5,000`:
+
+| Tier | Frequency | Naive (Phase 4) understates true cost by |
+|---|---|---|
+| mega-liquid ETF | daily | 0.04 bps/yr |
+| mega-liquid ETF | monthly | 0.01 bps/yr |
+| single stock | daily | 0.24 bps/yr |
+| single stock | monthly | 0.05 bps/yr |
+
+**The understatement is real and directionally as expected (worse at
+higher frequency, worse for less-liquid tiers) but small in absolute
+terms** — a quarter of a bp per year at worst. The reason: the crisis
+window is only 1 of the 9 total years, so even a 3x spread spike during
+it gets diluted into a small blended annualized effect. A sensitivity
+sweep on the multiplier itself (1x = no widening, up to 10x) confirms
+this isn't fragile to that stylized assumption — even at 10x, single-
+stock drag only reaches 3.5bps/yr, mega-liquid-ETF drag 0.5bps/yr, both
+still trivial next to Phase 2's rebalancing premiums and Phase 3's
+drawdown findings.
+
+**This closes Phase 4's flagged gap with an actual number, and the
+number says the gap doesn't matter much.** Phase 3's real crisis risk —
+tens of percent of extra drawdown from correlation breakdown — remains
+the dominant concern; spread-widening is a real but second-order effect
+on annualized growth. Worth stating plainly since it would have been easy
+to assume otherwise without running the number.
+
 ## Layout
 
 - `universal_portfolio/cover.py` — Phase 1: the reference algorithm (`cover_universal_2asset`), single-path, no external data dependency.
 - `universal_portfolio/data.py` — Phase 1: NYSE(O) dataset loader + the cumulative→period conversion.
 - `universal_portfolio/simulate.py` — Phase 2: correlated-GBM path generator; Phase 3: `Regime` + `simulate_regime_switching_gbm` for piecewise-constant-parameter paths.
-- `universal_portfolio/strategies.py` — Phase 2: the same algorithms as `cover.py`, vectorized across simulation paths (log-wealth space throughout, for numerical stability at 20-year/60%-vol horizons); cross-checked against `cover.py` in tests. Phase 3: `*_path` variants that expose the full trajectory (not just final wealth) + `max_drawdown_from_log_wealth_path`. Phase 4: `cost_bps`/`rebalance_every` on the fixed-CRP and Universal Portfolio path functions.
-- `universal_portfolio/costs.py` — Phase 4: sourced commission + effective-spread assumptions by vendor and liquidity tier.
+- `universal_portfolio/strategies.py` — Phase 2: the same algorithms as `cover.py`, vectorized across simulation paths (log-wealth space throughout, for numerical stability at 20-year/60%-vol horizons); cross-checked against `cover.py` in tests. Phase 3: `*_path` variants that expose the full trajectory (not just final wealth) + `max_drawdown_from_log_wealth_path`. Phase 4: `cost_bps`/`rebalance_every` on the fixed-CRP and Universal Portfolio path functions. Phase 6: `cost_bps` accepts either a scalar or a per-day array, for a cost that varies with the regime.
+- `universal_portfolio/costs.py` — Phase 4: sourced commission + effective-spread assumptions by vendor and liquidity tier; the `crisis` flag and `CRISIS_SPREAD_MULTIPLIER` (defined here since Phase 4, first actually used in Phase 6).
 - `universal_portfolio/market_data.py` — Phase 5: real price fetch/cache (`yfinance`) + conversion to the same price-relative convention used throughout.
 - `universal_portfolio/real_data_experiments.py` — Phase 5: pair backtests + rolling correlation on real data, reusing Phase 2-4's `strategies.py` functions with `n_paths=1` instead of a Monte Carlo batch.
-- `universal_portfolio/experiments.py` — Phases 2-4: the synthetic-data experiments, as pure functions returning DataFrames.
+- `universal_portfolio/experiments.py` — Phases 2-4 and 6: the synthetic-data experiments, as pure functions returning DataFrames.
 - `universal_portfolio/plotting.py` — chart rendering.
 - `scripts/replicate_cover1991.py`, `scripts/mechanism_simulation.py`, `scripts/real_data_backtest.py` — CLI entry points.
 - `tests/test_cover_replication.py` — Phase 1 tests: exact-number replication, the `universal wealth == mean(CRP wealth)` algebraic identity (true by construction, so it's what actually catches indexing/look-ahead bugs), a cross-check against `universal-portfolios`' own BCRP optimizer.
-- `tests/test_strategies.py` — Phase 2-4 tests: batched implementation vs. Phase 1's single-path reference, the same algebraic identity batched, `BCRP ≥ Universal Portfolio` always (also algebraic, not empirical), GBM simulator calibration (including per-regime calibration), drawdown correctness on hand-constructed paths, and Phase 4's cost/frequency mechanics (including a caught-by-testing subtlety: rebalancing frequency changes the underlying wealth process even at zero cost, since the weight drifts between rebalances — cost and "structural" frequency effects had to be tested separately, not conflated).
+- `tests/test_strategies.py` — Phase 2-4 and 6 tests: batched implementation vs. Phase 1's single-path reference, the same algebraic identity batched, `BCRP ≥ Universal Portfolio` always (also algebraic, not empirical), GBM simulator calibration (including per-regime calibration), drawdown correctness on hand-constructed paths, Phase 4's cost/frequency mechanics (including a caught-by-testing subtlety: rebalancing frequency changes the underlying wealth process even at zero cost, since the weight drifts between rebalances — cost and "structural" frequency effects had to be tested separately, not conflated), and Phase 6's array-valued cost (a constant array must reproduce the scalar exactly; a cost confined to a sub-window must leave the path untouched before that window starts).
 - `tests/test_real_data.py` — Phase 5 tests: sane price-relative bounds (loose on purpose — AMD alone had a real +52%/-24% single day in this window), BCRP ≥ fixed CRP and costed ≤ frictionless on real data, theory-vs-reality direction/scale, rolling correlation stays in [-1, 1]. Needs a local cache or network access; skips (doesn't fail) if neither is available, since Phase 5 is inherently network-dependent in a way Phases 1-4 aren't.
 
 ## Planned next phases
 
 Not yet implemented:
 
-1. **Crisis-regime cost interaction** — combine Phase 3's spread-widening-in-a-crisis intuition with Phase 4's cost model quantitatively, rather than as a qualitative caveat.
-2. **Rolling-window out-of-sample** — Phase 5 used one full-period backtest per pair; walk-forward across rolling 3-5y windows would show how much the conclusions above depend on the specific 2016-2026 window (particularly finding 2, which is plausibly period-specific).
+1. **Rolling-window out-of-sample** — Phase 5 used one full-period backtest per pair; walk-forward across rolling 3-5y windows would show how much the conclusions there depend on the specific 2016-2026 window (particularly the "excess vs. better leg" finding, which is plausibly period-specific to a decade with unusually extreme individual winners).
+2. **Tax drag** — flagged since Phase 4 as likely the single largest real-world cost this repo hasn't modeled: daily rebalancing in a taxable account realizes short-term capital gains every trading day, taxed as ordinary income.

@@ -35,6 +35,19 @@ Phase 4 adds transaction costs, which (1)-(4) ignore entirely:
    single-stock) against rebalancing frequency (daily/weekly/monthly),
    since less-frequent rebalancing trades fewer times but drifts further
    from target between trades -- not obviously better or worse a priori.
+
+Phase 6 combines (4) and (5), which each ignored the other: (5) charged a
+constant cost throughout, even across (4)'s crisis window, though spreads
+are well known to widen under stress (adverse-selection/inventory-risk
+compensation). costs.CRISIS_SPREAD_MULTIPLIER existed since Phase 4 but
+was never exercised by an experiment -- this is that experiment:
+
+6. `crisis_cost_interaction` — splices Phase 4's cost model onto Phase 3's
+   calm -> crisis -> calm regime-switching path, with the spread widening
+   ONLY during the crisis window. `crisis_multiplier_sensitivity` sweeps
+   the (stylized, not fitted -- flagged as such in costs.py) widening
+   multiplier itself, since that's an assumption worth stress-testing on
+   its own, not just used at its single default value of 3x.
 """
 from __future__ import annotations
 
@@ -288,4 +301,122 @@ def transaction_cost_sweep(
             }
         )
 
+    return pd.DataFrame(rows)
+
+
+def _crisis_regime_path(tier_base_params: dict, n_paths: int, seed: int) -> tuple:
+    """Shared plumbing for the two Phase 6 experiments below: the same
+    calm -> crisis -> calm path Phase 3 used, plus the calm-regime cost
+    for the requested tier. Returns (X, total_days, pre_days,
+    crisis_days, calm_cost_bps).
+    """
+    pre_days = int(tier_base_params["pre_years"] * TRADING_DAYS_PER_YEAR)
+    crisis_days = int(tier_base_params["crisis_years"] * TRADING_DAYS_PER_YEAR)
+    total_days = 2 * pre_days + crisis_days
+
+    calm = dict(
+        mu=(tier_base_params["base_mu"], tier_base_params["base_mu"]),
+        sigma=(tier_base_params["base_sigma"], tier_base_params["base_sigma"]),
+        rho=tier_base_params["base_rho"],
+    )
+    crisis_params = dict(mu=(-0.25, -0.25), sigma=(0.55, 0.55), rho=0.95)  # Phase 3's joint_crisis
+
+    regimes = [
+        Regime(n_days=pre_days, **calm),
+        Regime(n_days=crisis_days, **crisis_params),
+        Regime(n_days=pre_days, **calm),
+    ]
+    X = simulate_regime_switching_gbm(n_paths, regimes, seed=seed)
+    calm_cost = spread_cost_bps(tier_base_params["tier"], "fidelity", crisis=False)
+    return X, total_days, pre_days, crisis_days, calm_cost
+
+
+def crisis_cost_interaction(
+    tier: str = "mega_liquid_etf",
+    pre_years: float = 4.0,
+    crisis_years: float = 1.0,
+    base_mu: float = 0.08,
+    base_sigma: float = 0.25,
+    base_rho: float = -0.3,
+    n_paths: int = 5_000,
+    seed: int = 30,
+) -> pd.DataFrame:
+    """At daily/weekly/monthly rebalancing: how much does Phase 4's
+    naive constant-cost assumption UNDERSTATE the true cost once the
+    spread is allowed to widen (costs.CRISIS_SPREAD_MULTIPLIER, 3x)
+    specifically during Phase 3's crisis window, instead of applying the
+    calm-regime spread throughout?
+    """
+    params = dict(
+        tier=tier, pre_years=pre_years, crisis_years=crisis_years,
+        base_mu=base_mu, base_sigma=base_sigma, base_rho=base_rho,
+    )
+    X, total_days, pre_days, crisis_days, calm_cost = _crisis_regime_path(params, n_paths, seed)
+    crisis_cost = spread_cost_bps(tier, "fidelity", crisis=True)
+
+    naive_cost_arr = np.full(total_days, calm_cost)  # Phase 4: ignores crisis-window widening entirely
+    aware_cost_arr = np.full(total_days, calm_cost)
+    aware_cost_arr[pre_days : pre_days + crisis_days] = crisis_cost
+
+    rows = []
+    for freq_name, rebalance_every in {"daily": 1, "weekly": 5, "monthly": 21}.items():
+        free = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0, rebalance_every=rebalance_every)
+        naive = fixed_crp_log_wealth_path(X, 0.5, cost_bps=naive_cost_arr, rebalance_every=rebalance_every)
+        aware = fixed_crp_log_wealth_path(X, 0.5, cost_bps=aware_cost_arr, rebalance_every=rebalance_every)
+
+        rows.append(
+            {
+                "tier": tier,
+                "frequency": freq_name,
+                "frictionless_growth": (free[:, -1] / total_days * TRADING_DAYS_PER_YEAR).mean(),
+                "naive_cost_growth": (naive[:, -1] / total_days * TRADING_DAYS_PER_YEAR).mean(),
+                "crisis_aware_cost_growth": (aware[:, -1] / total_days * TRADING_DAYS_PER_YEAR).mean(),
+                "naive_understatement_bps": (
+                    (naive[:, -1] - aware[:, -1]) / total_days * TRADING_DAYS_PER_YEAR
+                ).mean()
+                * 1e4,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def crisis_multiplier_sensitivity(
+    multipliers=(1.0, 2.0, 3.0, 5.0, 10.0),
+    tier: str = "mega_liquid_etf",
+    pre_years: float = 4.0,
+    crisis_years: float = 1.0,
+    base_mu: float = 0.08,
+    base_sigma: float = 0.25,
+    base_rho: float = -0.3,
+    n_paths: int = 5_000,
+    seed: int = 31,
+) -> pd.DataFrame:
+    """How much does the crisis spread-widening multiplier itself matter
+    -- it's a stylized, not-fitted assumption (see costs.py), so this
+    sweeps it rather than trusting the single default of 3x. Daily
+    rebalancing throughout: the frequency most exposed to the crisis-
+    window cost spike, per crisis_cost_interaction's frequency comparison.
+    1.0x = no widening at all (Phase 4's implicit assumption).
+    """
+    params = dict(
+        tier=tier, pre_years=pre_years, crisis_years=crisis_years,
+        base_mu=base_mu, base_sigma=base_sigma, base_rho=base_rho,
+    )
+    X, total_days, pre_days, crisis_days, calm_cost = _crisis_regime_path(params, n_paths, seed)
+    free_growth = (fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0)[:, -1] / total_days * TRADING_DAYS_PER_YEAR).mean()
+
+    rows = []
+    for mult in multipliers:
+        cost_arr = np.full(total_days, calm_cost)
+        cost_arr[pre_days : pre_days + crisis_days] = calm_cost * mult
+        costed = fixed_crp_log_wealth_path(X, 0.5, cost_bps=cost_arr)
+        growth = (costed[:, -1] / total_days * TRADING_DAYS_PER_YEAR).mean()
+        rows.append(
+            {
+                "tier": tier,
+                "crisis_multiplier": mult,
+                "growth": growth,
+                "drag_vs_frictionless_bps": (free_growth - growth) * 1e4,
+            }
+        )
     return pd.DataFrame(rows)

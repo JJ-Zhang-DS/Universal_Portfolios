@@ -1,6 +1,7 @@
-"""Phases 2-4: controlled Monte Carlo experiments separating the
+"""Phases 2-6: controlled Monte Carlo experiments separating the
 rebalancing-premium effect from Cover's online-learning mechanism, then
-stress-testing it under regime shifts and real transaction costs.
+stress-testing it under regime shifts, real transaction costs, and their
+interaction.
 
     python -m scripts.mechanism_simulation [--out-dir results] [--quick]
 
@@ -17,6 +18,8 @@ import os
 import pandas as pd
 
 from universal_portfolio.experiments import (
+    crisis_cost_interaction,
+    crisis_multiplier_sensitivity,
     drift_difference_sweep,
     horizon_convergence,
     rebalancing_premium_sweep,
@@ -24,6 +27,8 @@ from universal_portfolio.experiments import (
     transaction_cost_sweep,
 )
 from universal_portfolio.plotting import (
+    plot_crisis_cost_interaction,
+    plot_crisis_multiplier_sensitivity,
     plot_drift_difference,
     plot_horizon_convergence,
     plot_rebalancing_premium,
@@ -93,6 +98,24 @@ def main() -> None:
     exp5_etf.to_csv(os.path.join(args.out_dir, "exp5_costs_mega_liquid_etf.csv"), index=False)
     exp5_stock.to_csv(os.path.join(args.out_dir, "exp5_costs_single_stock.csv"), index=False)
     plot_transaction_costs(exp5_etf, exp5_stock, os.path.join(args.out_dir, "exp5_transaction_costs.png"))
+
+    print()
+    print("=" * 70)
+    print("Experiment 6: crisis-regime cost interaction")
+    print("=" * 70)
+    exp6a_etf = crisis_cost_interaction(tier="mega_liquid_etf", n_paths=n_paths_up)
+    exp6a_stock = crisis_cost_interaction(tier="single_stock", n_paths=n_paths_up)
+    exp6a = pd.concat([exp6a_etf, exp6a_stock], ignore_index=True)
+    print(exp6a.to_string(index=False))
+    exp6a.to_csv(os.path.join(args.out_dir, "exp7_crisis_cost_interaction.csv"), index=False)
+    plot_crisis_cost_interaction(exp6a, os.path.join(args.out_dir, "exp7_crisis_cost_interaction.png"))
+
+    exp6b_etf = crisis_multiplier_sensitivity(tier="mega_liquid_etf", n_paths=n_paths_up)
+    exp6b_stock = crisis_multiplier_sensitivity(tier="single_stock", n_paths=n_paths_up)
+    exp6b = pd.concat([exp6b_etf, exp6b_stock], ignore_index=True)
+    print(exp6b.to_string(index=False))
+    exp6b.to_csv(os.path.join(args.out_dir, "exp7_crisis_multiplier_sensitivity.csv"), index=False)
+    plot_crisis_multiplier_sensitivity(exp6b, os.path.join(args.out_dir, "exp7_crisis_multiplier_sensitivity.png"))
 
     print()
     print(f"CSVs and charts written to {args.out_dir}/")

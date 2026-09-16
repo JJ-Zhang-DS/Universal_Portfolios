@@ -214,3 +214,35 @@ def test_less_frequent_rebalancing_reduces_cost_drag_at_fixed_cost_rate():
     daily_drag = (daily_free - daily_costed).mean()
     monthly_drag = (monthly_free - monthly_costed).mean()
     assert monthly_drag < daily_drag
+
+
+def test_fixed_crp_scalar_cost_matches_constant_array():
+    """Phase 6 lets cost_bps vary by day (e.g. wider during a crisis
+    window); a constant array must reproduce the existing scalar
+    behavior exactly, not just approximately."""
+    X = _random_paths(n_paths=20, n_days=150, seed=16)
+    scalar = fixed_crp_log_wealth_path(X, 0.5, cost_bps=5.0)
+    array = fixed_crp_log_wealth_path(X, 0.5, cost_bps=np.full(150, 5.0))
+    np.testing.assert_allclose(scalar, array, rtol=1e-12)
+
+
+def test_universal_portfolio_scalar_cost_matches_constant_array():
+    X = _random_paths(n_paths=20, n_days=150, seed=17)
+    scalar = universal_portfolio_log_wealth(X, cost_bps=5.0, full_path=True)
+    array = universal_portfolio_log_wealth(X, cost_bps=np.full(150, 5.0), full_path=True)
+    np.testing.assert_allclose(scalar, array, rtol=1e-12)
+
+
+def test_fixed_crp_time_varying_cost_only_bites_inside_its_window():
+    """A cost array that's zero everywhere except a sub-window must
+    reproduce the frictionless path exactly before that window starts,
+    and diverge from it once the window begins."""
+    X = _random_paths(n_paths=20, n_days=100, seed=18)
+    cost = np.zeros(100)
+    cost[40:60] = 20.0
+
+    varying = fixed_crp_log_wealth_path(X, 0.5, cost_bps=cost)
+    free = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0)
+
+    np.testing.assert_allclose(varying[:, :40], free[:, :40], rtol=1e-12)
+    assert not np.allclose(varying[:, 40:], free[:, 40:])
