@@ -15,14 +15,32 @@ Three questions, each isolated by holding everything else fixed:
 3. `horizon_convergence` — Cover's actual claim is asymptotic (regret -> 0
    as the horizon grows), not "wins in finite samples." Check the shrink
    pattern directly instead of taking that on faith.
+
+Phase 3 adds one more question, using regime-switching (not constant-
+parameter) GBM, since (1)-(3) can't represent a parameter that changes
+mid-horizon:
+
+4. `regime_shift_scenarios` — does the rebalancing premium survive when
+   correlation/volatility regime-shift into a crisis exactly when a
+   drawdown also hits? Three crisis definitions (correlation-only,
+   volatility-only, and a realistic joint crisis where both jump together
+   with drift turning negative), each compared against a no-crisis
+   counterfactual over the same total horizon.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from .simulate import simulate_correlated_gbm
-from .strategies import bcrp_grid, buy_and_hold_log_wealth, fixed_crp_log_wealth, universal_portfolio_log_wealth
+from .simulate import Regime, simulate_correlated_gbm, simulate_regime_switching_gbm
+from .strategies import (
+    bcrp_grid,
+    buy_and_hold_log_wealth,
+    fixed_crp_log_wealth,
+    fixed_crp_log_wealth_path,
+    max_drawdown_from_log_wealth_path,
+    universal_portfolio_log_wealth,
+)
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -128,4 +146,75 @@ def horizon_convergence(
                 "mean_regret_per_day_se": regret_per_day.std(ddof=1) / np.sqrt(n_paths),
             }
         )
+    return pd.DataFrame(rows)
+
+
+def regime_shift_scenarios(
+    n_paths: int = 5_000,
+    pre_years: float = 4.0,
+    crisis_years: float = 1.0,
+    base_mu: float = 0.08,
+    base_sigma: float = 0.25,
+    base_rho: float = -0.3,
+    seed: int = 10,
+) -> pd.DataFrame:
+    """Splice a crisis window into an otherwise-calm horizon and compare
+    against a same-length no-crisis counterfactual, for three crisis
+    definitions:
+
+    - correlation_only: rho jumps to 0.95, mu/sigma unchanged
+    - volatility_only:  sigma more than doubles, mu/rho unchanged
+    - joint_crisis:     rho and sigma both jump AND drift turns sharply
+      negative -- a realistic crash, where the diversification you were
+      relying on (low/negative rho) disappears exactly when the drawdown
+      hits, not independently of it
+
+    The crisis and no-crisis paths for a given scenario share the same
+    seed, so the pre/post (calm) segments are IDENTICAL draws in both --
+    the only source of difference is the crisis window's parameters. This
+    common-random-numbers pairing makes the crisis-vs-no-crisis delta far
+    less noisy than comparing independent Monte Carlo runs would be.
+    """
+    pre_days = int(pre_years * TRADING_DAYS_PER_YEAR)
+    crisis_days = int(crisis_years * TRADING_DAYS_PER_YEAR)
+    total_days = 2 * pre_days + crisis_days
+
+    calm = dict(mu=(base_mu, base_mu), sigma=(base_sigma, base_sigma), rho=base_rho)
+    crisis_defs = {
+        "correlation_only": dict(mu=(base_mu, base_mu), sigma=(base_sigma, base_sigma), rho=0.95),
+        "volatility_only": dict(mu=(base_mu, base_mu), sigma=(0.55, 0.55), rho=base_rho),
+        "joint_crisis": dict(mu=(-0.25, -0.25), sigma=(0.55, 0.55), rho=0.95),
+    }
+
+    rows = []
+    for scenario_name, crisis_params in crisis_defs.items():
+        for regime_label, middle in (("crisis", crisis_params), ("no_crisis", calm)):
+            regimes = [
+                Regime(n_days=pre_days, **calm),
+                Regime(n_days=crisis_days, **middle),
+                Regime(n_days=pre_days, **calm),
+            ]
+            X = simulate_regime_switching_gbm(n_paths, regimes, seed=seed)
+
+            bh_log_wealth_path = np.log(X).cumsum(axis=1)  # (n_paths, n_days, 2)
+            crp_log_wealth_path = fixed_crp_log_wealth_path(X, 0.5)
+            up_log_wealth_path = universal_portfolio_log_wealth(X, full_path=True)
+
+            bh_growth = bh_log_wealth_path[:, -1, :] / total_days * TRADING_DAYS_PER_YEAR  # (n_paths, 2)
+            bh_dd = np.stack(
+                [max_drawdown_from_log_wealth_path(bh_log_wealth_path[:, :, i]) for i in range(2)], axis=1
+            )  # (n_paths, 2)
+
+            rows.append(
+                {
+                    "scenario": scenario_name,
+                    "regime": regime_label,
+                    "crp_final_growth": (crp_log_wealth_path[:, -1] / total_days * TRADING_DAYS_PER_YEAR).mean(),
+                    "crp_max_drawdown": max_drawdown_from_log_wealth_path(crp_log_wealth_path).mean(),
+                    "up_final_growth": (up_log_wealth_path[:, -1] / total_days * TRADING_DAYS_PER_YEAR).mean(),
+                    "up_max_drawdown": max_drawdown_from_log_wealth_path(up_log_wealth_path).mean(),
+                    "bh_leg_avg_final_growth": bh_growth.mean(),
+                    "bh_leg_avg_max_drawdown": bh_dd.mean(),
+                }
+            )
     return pd.DataFrame(rows)

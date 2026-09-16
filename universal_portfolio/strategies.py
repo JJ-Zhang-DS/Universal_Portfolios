@@ -40,6 +40,33 @@ def fixed_crp_log_wealth(X: np.ndarray, b: float) -> np.ndarray:
     return np.log(growth).sum(axis=1)
 
 
+def fixed_crp_log_wealth_path(X: np.ndarray, b: float) -> np.ndarray:
+    """Same as `fixed_crp_log_wealth` but returns the full cumulative
+    log-wealth trajectory instead of just the final value — needed for
+    drawdown, which depends on the path, not just the endpoint.
+
+    :returns: shape (n_paths, n_days).
+    """
+    growth = b * X[:, :, 0] + (1 - b) * X[:, :, 1]
+    return np.log(growth).cumsum(axis=1)
+
+
+def max_drawdown_from_log_wealth_path(log_wealth_path: np.ndarray, axis: int = -1) -> np.ndarray:
+    """Max drawdown (as a negative fraction, e.g. -0.35 == -35%) from a
+    cumulative log-wealth trajectory.
+
+    Works entirely on differences from the running max in log-space
+    (`log(W_t / running_max(W)_t)`) and only exponentiates that bounded,
+    typically-small difference — not the raw cumulative log-wealth, which
+    can otherwise be large enough that `exp` overflows. Since `exp` is
+    monotonic, `running_max(exp(L)) == exp(running_max(L))`, so this is
+    exact, not an approximation.
+    """
+    running_max = np.maximum.accumulate(log_wealth_path, axis=axis)
+    log_drawdown = log_wealth_path - running_max  # <= 0 everywhere
+    return np.exp(log_drawdown.min(axis=axis)) - 1
+
+
 @dataclass
 class BCRPResult:
     best_b: np.ndarray  # shape (n_paths,)
@@ -66,7 +93,7 @@ def bcrp_grid(X: np.ndarray, grid_size: int = 21) -> BCRPResult:
     return BCRPResult(best_b=b_grid[best_idx], best_log_wealth=log_wealth[rows, best_idx])
 
 
-def universal_portfolio_log_wealth(X: np.ndarray, grid_size: int = 21) -> np.ndarray:
+def universal_portfolio_log_wealth(X: np.ndarray, grid_size: int = 21, full_path: bool = False) -> np.ndarray:
     """Cover's Universal Portfolio, vectorized across paths.
 
     Same algorithm as `cover.cover_universal_2asset` (wealth-weighted
@@ -75,13 +102,17 @@ def universal_portfolio_log_wealth(X: np.ndarray, grid_size: int = 21) -> np.nda
     days (n_days iterations), not over paths.
 
     :param X: shape (n_paths, n_days, 2).
-    :returns: final log-wealth, shape (n_paths,).
+    :param full_path: if True, return the full cumulative log-wealth
+        trajectory (shape (n_paths, n_days)) instead of just the final
+        value — needed for drawdown, which depends on the path.
+    :returns: shape (n_paths,), or (n_paths, n_days) if `full_path`.
     """
     n_paths, n_days, _ = X.shape
     b_grid = np.linspace(0.0, 1.0, grid_size)
 
     log_crp_wealth = np.zeros((n_paths, grid_size))
-    log_universal_wealth = np.zeros(n_paths)
+    log_universal_wealth_path = np.empty((n_paths, n_days))
+    running = np.zeros(n_paths)
 
     for t in range(n_days):
         # log-sum-exp shift: keeps exp() arguments <= 0 regardless of how
@@ -92,7 +123,8 @@ def universal_portfolio_log_wealth(X: np.ndarray, grid_size: int = 21) -> np.nda
         b_hat = (prob * b_grid).sum(axis=1)
 
         x0, x1 = X[:, t, 0], X[:, t, 1]
-        log_universal_wealth += np.log(b_hat * x0 + (1 - b_hat) * x1)
+        running = running + np.log(b_hat * x0 + (1 - b_hat) * x1)
+        log_universal_wealth_path[:, t] = running
         log_crp_wealth += np.log(b_grid * x0[:, None] + (1 - b_grid) * x1[:, None])
 
-    return log_universal_wealth
+    return log_universal_wealth_path if full_path else log_universal_wealth_path[:, -1]

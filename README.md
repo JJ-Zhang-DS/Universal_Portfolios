@@ -94,22 +94,60 @@ at σ=40%, ρ=0, `n_paths=5,000` — 0.00074 (1y) → 0.00027 (5y) → 0.00016
 (10y) → 0.00010 (20y). Monotonically shrinking, consistent with Cover's
 asymptotic (not finite-sample) guarantee.
 
+## Status: Phase 3 — regime-shift stress tests (done)
+
+Phase 2 used *constant*-parameter GBM throughout each simulation. Real
+crises don't hold parameters constant — correlation and volatility shift
+mid-horizon, together, exactly when it hurts. `regime_shift_scenarios`
+splices a crisis window into an otherwise-calm 9-year horizon (4y calm →
+1y crisis → 4y calm) and compares against a same-length no-crisis
+counterfactual (same seed, so only the crisis window's parameters differ —
+common random numbers, for a low-noise comparison), for three crisis
+definitions, `n_paths=5,000`:
+
+| Crisis definition | Δ max drawdown, 50/50 CRP | Δ max drawdown, buy & hold (leg avg) | Δ growth/yr, CRP | Δ growth/yr, B&H |
+|---|---|---|---|---|
+| Correlation only (ρ: −0.3→0.95) | **−4.2%** | −0.1% | −0.3% | −0.0% |
+| Volatility only (σ: 25%→55%) | −8.3% | −9.4% | −0.5% | **−1.4%** |
+| Joint crisis (ρ,σ↑, μ turns negative) | **−28.8%** | −15.7% | −5.3% | −5.1% |
+
+Two findings that directly qualify Phase 2's results:
+
+- **Correlation-only breakdown hurts the rebalanced portfolio ~40x more
+  than buy-and-hold on drawdown** (−4.2% vs. −0.1%), for essentially zero
+  growth-rate cost either way. This isolates the mechanism cleanly: a
+  single leg's own drawdown doesn't depend on what it's correlated with,
+  but a rebalanced portfolio's risk does — directly, since the
+  diversification it was relying on is what just vanished. This is
+  exactly the real-world "correlations go to 1 in a crisis" phenomenon,
+  and it hits rebalancing specifically, not buy-and-hold.
+- **Under a realistic joint crisis, 50/50 CRP's drawdown is ~2x worse than
+  buy-and-hold's** (−28.8% vs. −15.7%) despite near-identical growth-rate
+  cost (−5.3% vs. −5.1%/yr). Rebalancing and buy-and-hold pay a similar
+  price in terminal wealth here, but rebalancing pays it as a much sharper
+  peak-to-trough hit — a distinction that matters for anything path-
+  dependent (margin, redemptions, whether you hold on).
+
+Universal Portfolio tracks fixed 50/50 CRP closely throughout this
+experiment (both numbers move together in every row) — unlike Phase 2's
+drift-difference test, nothing here is asymmetric enough for UP's
+adaptive weighting to diverge from a static 50/50.
+
 ## Layout
 
 - `universal_portfolio/cover.py` — Phase 1: the reference algorithm (`cover_universal_2asset`), single-path, no external data dependency.
 - `universal_portfolio/data.py` — Phase 1: NYSE(O) dataset loader + the cumulative→period conversion.
-- `universal_portfolio/simulate.py` — Phase 2: correlated-GBM path generator.
-- `universal_portfolio/strategies.py` — Phase 2: the same algorithms as `cover.py`, vectorized across simulation paths (log-wealth space throughout, for numerical stability at 20-year/60%-vol horizons); cross-checked against `cover.py` in tests.
-- `universal_portfolio/experiments.py` — Phase 2: the three experiments above, as pure functions returning DataFrames.
-- `universal_portfolio/plotting.py` — Phase 2: chart rendering.
+- `universal_portfolio/simulate.py` — Phase 2: correlated-GBM path generator; Phase 3: `Regime` + `simulate_regime_switching_gbm` for piecewise-constant-parameter paths.
+- `universal_portfolio/strategies.py` — Phase 2: the same algorithms as `cover.py`, vectorized across simulation paths (log-wealth space throughout, for numerical stability at 20-year/60%-vol horizons); cross-checked against `cover.py` in tests. Phase 3: `*_path` variants that expose the full trajectory (not just final wealth) + `max_drawdown_from_log_wealth_path`.
+- `universal_portfolio/experiments.py` — Phases 2-3: the four experiments above, as pure functions returning DataFrames.
+- `universal_portfolio/plotting.py` — chart rendering.
 - `scripts/replicate_cover1991.py`, `scripts/mechanism_simulation.py` — CLI entry points.
 - `tests/test_cover_replication.py` — Phase 1 tests: exact-number replication, the `universal wealth == mean(CRP wealth)` algebraic identity (true by construction, so it's what actually catches indexing/look-ahead bugs), a cross-check against `universal-portfolios`' own BCRP optimizer.
-- `tests/test_strategies.py` — Phase 2 tests: batched implementation vs. Phase 1's single-path reference, the same algebraic identity batched, `BCRP ≥ Universal Portfolio` always (also algebraic, not empirical), and GBM simulator calibration.
+- `tests/test_strategies.py` — Phase 2-3 tests: batched implementation vs. Phase 1's single-path reference, the same algebraic identity batched, `BCRP ≥ Universal Portfolio` always (also algebraic, not empirical), GBM simulator calibration (including per-regime calibration for the regime-switching generator), and drawdown correctness on hand-constructed paths.
 
 ## Planned next phases
 
 Not yet implemented:
 
-1. **Regime-change stress tests** — correlation suddenly → 1, volatility regime shift mid-horizon. Phase 2's drift-difference sweep already falsifies "just rebalance any two volatile stocks" for *persistent* winner/loser; this extends it to parameters that *change*, which constant-parameter GBM can't represent.
-2. **Transaction costs** — proportional cost + rebalancing frequency (daily/weekly/monthly), since both Phase 1 and Phase 2 are frictionless and daily rebalancing is not free.
-3. **Modern out-of-sample** — real ETF pairs. Important caveat given Phase 2's results: candidates must be genuinely weakly/negatively correlated (e.g. equity+duration or equity+gold), not two single-name growth stocks, and *especially* not two tickers both carrying US-equity-market beta — correlation between those tends toward 1 exactly when it matters most (drawdowns), which is (1) above.
+1. **Transaction costs** — proportional cost + rebalancing frequency (daily/weekly/monthly), since Phases 1-3 are all frictionless and daily rebalancing is not free.
+2. **Modern out-of-sample** — real ETF pairs. Important caveat given Phases 2-3's results: candidates must be genuinely weakly/negatively correlated (e.g. equity+duration or equity+gold), not two single-name growth stocks, and *especially* not two tickers both carrying US-equity-market beta — correlation between those tends toward 1 exactly when it matters most (drawdowns, per Phase 3), which is precisely where Phase 3 shows rebalancing gets hurt worst.

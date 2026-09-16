@@ -1,9 +1,10 @@
-"""Phase 2: controlled Monte Carlo experiments separating the rebalancing-
-premium effect from Cover's online-learning mechanism.
+"""Phases 2-3: controlled Monte Carlo experiments separating the
+rebalancing-premium effect from Cover's online-learning mechanism, then
+stress-testing it under regime shifts constant-parameter GBM can't represent.
 
     python -m scripts.mechanism_simulation [--out-dir results] [--quick]
 
-Runs all three experiments (see universal_portfolio/experiments.py for what
+Runs all four experiments (see universal_portfolio/experiments.py for what
 each isolates), prints summary tables, saves CSVs + charts to --out-dir.
 --quick cuts path counts for a fast smoke-test run (looser confidence
 intervals — use the defaults for anything you'd actually cite).
@@ -19,11 +20,13 @@ from universal_portfolio.experiments import (
     drift_difference_sweep,
     horizon_convergence,
     rebalancing_premium_sweep,
+    regime_shift_scenarios,
 )
 from universal_portfolio.plotting import (
     plot_drift_difference,
     plot_horizon_convergence,
     plot_rebalancing_premium,
+    plot_regime_shift,
 )
 
 pd.set_option("display.width", 160)
@@ -65,6 +68,15 @@ def main() -> None:
     print(exp3.to_string(index=False))
     exp3.to_csv(os.path.join(args.out_dir, "exp3_horizon_convergence.csv"), index=False)
     plot_horizon_convergence(exp3, os.path.join(args.out_dir, "exp3_horizon_convergence.png"))
+
+    print()
+    print("=" * 70)
+    print("Experiment 4: regime-shift stress tests (correlation/vol crisis)")
+    print("=" * 70)
+    exp4 = regime_shift_scenarios(n_paths=n_paths_up)
+    print(exp4.to_string(index=False))
+    exp4.to_csv(os.path.join(args.out_dir, "exp4_regime_shift.csv"), index=False)
+    plot_regime_shift(exp4, os.path.join(args.out_dir, "exp4_regime_shift.png"))
 
     print()
     print(f"CSVs and charts written to {args.out_dir}/")

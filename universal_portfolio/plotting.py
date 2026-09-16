@@ -210,3 +210,67 @@ def plot_horizon_convergence(df: pd.DataFrame, path: str) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=200, facecolor=SURFACE)
     plt.close(fig)
+
+
+def plot_regime_shift(df: pd.DataFrame, path: str) -> None:
+    """Grouped bars: the crisis window's cost (crisis minus its no-crisis
+    counterfactual) to fixed 50/50 CRP vs. plain buy-and-hold, per crisis
+    definition. Bars rather than lines because the x-axis (scenario) is
+    categorical, not ordered/continuous.
+    """
+    scenarios = ["correlation_only", "volatility_only", "joint_crisis"]
+    scenario_labels = {
+        "correlation_only": "correlation\nonly (ρ→0.95)",
+        "volatility_only": "volatility\nonly (σ→55%)",
+        "joint_crisis": "joint crisis\n(ρ,σ↑, μ<0)",
+    }
+
+    crisis = df[df["regime"] == "crisis"].set_index("scenario").loc[scenarios]
+    calm = df[df["regime"] == "no_crisis"].set_index("scenario").loc[scenarios]
+
+    panels = [
+        (
+            crisis["crp_max_drawdown"] - calm["crp_max_drawdown"],
+            crisis["bh_leg_avg_max_drawdown"] - calm["bh_leg_avg_max_drawdown"],
+            "Extra drawdown from the crisis window\n(crisis − no-crisis; more negative = worse)",
+            "Δ max drawdown",
+        ),
+        (
+            crisis["crp_final_growth"] - calm["crp_final_growth"],
+            crisis["bh_leg_avg_final_growth"] - calm["bh_leg_avg_final_growth"],
+            "Growth-rate cost of the crisis window\n(crisis − no-crisis)",
+            "Δ annualized log-growth",
+        ),
+    ]
+
+    x = np.arange(len(scenarios))
+    width = 0.32
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), facecolor=SURFACE)
+
+    for ax, (delta_crp, delta_bh, title, ylabel) in zip(axes, panels):
+        ax.bar(x - width / 2, delta_crp.values, width, color=BLUE, zorder=3)
+        ax.bar(x + width / 2, delta_bh.values, width, color=ORANGE, zorder=3)
+
+        for xi, v in zip(x - width / 2, delta_crp.values):
+            ax.annotate(f"{v:+.1%}", xy=(xi, v), xytext=(0, 3 if v >= 0 else -12),
+                        textcoords="offset points", ha="center", fontsize=8, color=INK_SECONDARY)
+        for xi, v in zip(x + width / 2, delta_bh.values):
+            ax.annotate(f"{v:+.1%}", xy=(xi, v), xytext=(0, 3 if v >= 0 else -12),
+                        textcoords="offset points", ha="center", fontsize=8, color=INK_SECONDARY)
+
+        ax.axhline(0, color=BASELINE, linewidth=1)
+        ax.set_xticks(x)
+        ax.set_xticklabels([scenario_labels[s] for s in scenarios], fontsize=9, color=INK_SECONDARY)
+        ax.set_title(title, fontsize=10, color=INK_PRIMARY, loc="left")
+        ax.set_ylabel(ylabel, fontsize=9, color=INK_SECONDARY)
+        _style_axes(ax)
+
+    handles = [plt.Line2D([0], [0], color=BLUE, lw=6), plt.Line2D([0], [0], color=ORANGE, lw=6)]
+    fig.legend(
+        handles, ["fixed 50/50 CRP", "buy & hold (leg avg)"], loc="upper center", ncol=2, frameon=False,
+        bbox_to_anchor=(0.5, 1.06), fontsize=9, labelcolor=INK_SECONDARY,
+    )
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)

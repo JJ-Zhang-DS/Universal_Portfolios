@@ -2,10 +2,12 @@ import numpy as np
 import pytest
 
 from universal_portfolio.cover import cover_universal_2asset
-from universal_portfolio.simulate import simulate_correlated_gbm
+from universal_portfolio.simulate import Regime, simulate_correlated_gbm, simulate_regime_switching_gbm
 from universal_portfolio.strategies import (
     bcrp_grid,
     fixed_crp_log_wealth,
+    fixed_crp_log_wealth_path,
+    max_drawdown_from_log_wealth_path,
     universal_portfolio_log_wealth,
 )
 
@@ -83,3 +85,54 @@ def test_simulator_matches_target_moments_and_correlation():
     np.testing.assert_allclose(annualized_mean, mu, atol=0.01)
     np.testing.assert_allclose(annualized_std, sigma, atol=0.01)
     assert sample_rho == pytest.approx(rho, abs=0.02)
+
+
+def test_regime_switching_gbm_matches_each_segments_own_parameters():
+    """Each regime segment should look, on its own, like a plain
+    `simulate_correlated_gbm` draw with that segment's parameters —
+    concatenation must not leak one regime's correlation/vol into
+    another's."""
+    n_paths = 20_000
+    calm = dict(mu=(0.08, 0.08), sigma=(0.25, 0.25), rho=-0.3)
+    crisis = dict(mu=(-0.25, -0.25), sigma=(0.55, 0.55), rho=0.95)
+
+    regimes = [Regime(n_days=252, **calm), Regime(n_days=126, **crisis), Regime(n_days=252, **calm)]
+    X = simulate_regime_switching_gbm(n_paths, regimes, seed=7)
+    assert X.shape == (n_paths, 630, 2)
+
+    for start, end, params in [(0, 252, calm), (252, 378, crisis), (378, 630, calm)]:
+        log_r = np.log(X[:, start:end, :])
+        sample_rho = np.corrcoef(log_r[:, :, 0].ravel(), log_r[:, :, 1].ravel())[0, 1]
+        annualized_std = log_r.std(axis=(0, 1)) * np.sqrt(252)
+
+        assert sample_rho == pytest.approx(params["rho"], abs=0.03)
+        np.testing.assert_allclose(annualized_std, params["sigma"], atol=0.015)
+
+
+def test_path_functions_final_value_matches_scalar_functions():
+    """The *_path variants exist only to expose intermediate values for
+    drawdown; their final column must reproduce the existing (tested)
+    scalar functions exactly."""
+    rng = np.random.default_rng(5)
+    X = np.exp(rng.normal(loc=0.0002, scale=0.02, size=(15, 400, 2)))
+
+    np.testing.assert_allclose(fixed_crp_log_wealth_path(X, 0.5)[:, -1], fixed_crp_log_wealth(X, 0.5))
+    np.testing.assert_allclose(
+        universal_portfolio_log_wealth(X, full_path=True)[:, -1], universal_portfolio_log_wealth(X, full_path=False)
+    )
+
+
+def test_max_drawdown_on_known_path():
+    """A hand-constructed wealth path with a known peak-to-trough drop."""
+    # wealth: 1 -> 1.2 -> 0.6 -> 0.9  => drawdown from peak 1.2 to trough 0.6 = -50%
+    wealth = np.array([[1.0, 1.2, 0.6, 0.9]])
+    log_wealth_path = np.log(wealth)
+
+    dd = max_drawdown_from_log_wealth_path(log_wealth_path)
+    assert dd[0] == pytest.approx(-0.5)
+
+
+def test_max_drawdown_is_zero_for_monotonically_increasing_path():
+    log_wealth_path = np.log(np.array([[1.0, 1.1, 1.3, 1.3, 1.4]]))
+    dd = max_drawdown_from_log_wealth_path(log_wealth_path)
+    assert dd[0] == pytest.approx(0.0)

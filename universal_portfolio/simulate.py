@@ -11,7 +11,48 @@ convention `cover.cover_universal_2asset` and `strategies.py` expect.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
+
+
+@dataclass
+class Regime:
+    """One piecewise-constant-parameter segment of a regime-switching GBM."""
+
+    mu: tuple[float, float]
+    sigma: tuple[float, float]
+    rho: float
+    n_days: int
+
+
+def simulate_regime_switching_gbm(
+    n_paths: int,
+    regimes: list[Regime],
+    seed: int | None = None,
+    dt: float = 1 / 252,
+) -> np.ndarray:
+    """Concatenate independently-drawn GBM segments, each with its own
+    (mu, sigma, rho), into one path per asset.
+
+    This is exact, not an approximation: log-returns are independent
+    increments, so splicing separately-generated log-return segments with
+    different parameters at the boundary *is* the definition of a
+    regime-switching GBM — no continuity adjustment is needed because we
+    work in return space throughout, never in price levels.
+
+    Each regime gets its own independent random substream (via
+    `np.random.SeedSequence.spawn`), not a slice of one shared stream, so
+    adding/removing/reordering regimes doesn't change other regimes' draws.
+
+    :returns: shape (n_paths, sum(r.n_days for r in regimes), 2).
+    """
+    seeds = np.random.SeedSequence(seed).spawn(len(regimes))
+    segments = [
+        simulate_correlated_gbm(n_paths, regime.n_days, mu=regime.mu, sigma=regime.sigma, rho=regime.rho, seed=s, dt=dt)
+        for regime, s in zip(regimes, seeds)
+    ]
+    return np.concatenate(segments, axis=1)
 
 
 def simulate_correlated_gbm(
