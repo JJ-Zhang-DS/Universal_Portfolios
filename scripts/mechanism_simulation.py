@@ -1,7 +1,7 @@
-"""Phases 2-6: controlled Monte Carlo experiments separating the
+"""Phases 2-7: controlled Monte Carlo experiments separating the
 rebalancing-premium effect from Cover's online-learning mechanism, then
-stress-testing it under regime shifts, real transaction costs, and their
-interaction.
+stress-testing it under regime shifts, real transaction costs, their
+interaction, and US capital-gains tax.
 
     python -m scripts.mechanism_simulation [--out-dir results] [--quick]
 
@@ -24,6 +24,7 @@ from universal_portfolio.experiments import (
     horizon_convergence,
     rebalancing_premium_sweep,
     regime_shift_scenarios,
+    tax_drag_sweep,
     transaction_cost_sweep,
 )
 from universal_portfolio.plotting import (
@@ -33,6 +34,7 @@ from universal_portfolio.plotting import (
     plot_horizon_convergence,
     plot_rebalancing_premium,
     plot_regime_shift,
+    plot_tax_drag,
     plot_transaction_costs,
 )
 
@@ -116,6 +118,15 @@ def main() -> None:
     print(exp6b.to_string(index=False))
     exp6b.to_csv(os.path.join(args.out_dir, "exp7_crisis_multiplier_sensitivity.csv"), index=False)
     plot_crisis_multiplier_sensitivity(exp6b, os.path.join(args.out_dir, "exp7_crisis_multiplier_sensitivity.png"))
+
+    print()
+    print("=" * 70)
+    print("Experiment 7: tax drag (account type/bracket x frequency)")
+    print("=" * 70)
+    exp7 = tax_drag_sweep(n_paths=n_paths_up)
+    print(exp7.to_string(index=False))
+    exp7.to_csv(os.path.join(args.out_dir, "exp8_tax_drag.csv"), index=False)
+    plot_tax_drag(exp7, os.path.join(args.out_dir, "exp8_tax_drag.png"))
 
     print()
     print(f"CSVs and charts written to {args.out_dir}/")

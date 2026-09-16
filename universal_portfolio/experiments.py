@@ -48,6 +48,22 @@ was never exercised by an experiment -- this is that experiment:
    the (stylized, not fitted -- flagged as such in costs.py) widening
    multiplier itself, since that's an assumption worth stress-testing on
    its own, not just used at its single default value of 3x.
+
+Phase 7 adds US capital-gains tax, which (1)-(6) all ignore -- and which
+is not the same question as Phase 4's bid-ask-spread cost, despite both
+being "frictions": a spread cost is a fixed toll on turnover; tax is a
+percentage OF THE REALIZED GAIN, so it depends on account type and
+holding period, not just trade frequency. See taxes.py for why "I didn't
+cash out" doesn't avoid it (short answer: wrong rule -- that's wash sale,
+which only defers LOSSES on repurchasing the SAME security, not a
+general reinvested-means-untaxed shield; realization under IRC Section
+1001 taxes every sale in a taxable account regardless of reinvestment):
+
+7. `tax_drag_sweep` — crosses account type / bracket (tax-advantaged,
+   moderate, high -- see taxes.py) against rebalancing frequency
+   (daily/weekly/monthly), at both an optimistic (long-term rate applied
+   throughout) and realistic (short-term rate, the likely case for
+   frequent rebalancing) holding-period assumption.
 """
 from __future__ import annotations
 
@@ -61,9 +77,11 @@ from .strategies import (
     buy_and_hold_log_wealth,
     fixed_crp_log_wealth,
     fixed_crp_log_wealth_path,
+    fixed_crp_log_wealth_path_with_tax,
     max_drawdown_from_log_wealth_path,
     universal_portfolio_log_wealth,
 )
+from .taxes import HIGH_BRACKET, MODERATE_BRACKET, TAX_ADVANTAGED
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -419,4 +437,52 @@ def crisis_multiplier_sensitivity(
                 "drag_vs_frictionless_bps": (free_growth - growth) * 1e4,
             }
         )
+    return pd.DataFrame(rows)
+
+
+def tax_drag_sweep(
+    base_mu: float = 0.08,
+    base_sigma: float = 0.25,
+    base_rho: float = -0.3,
+    horizon_years: float = 10.0,
+    n_paths: int = 5_000,
+    seed: int = 40,
+) -> pd.DataFrame:
+    """Fixed 50/50 CRP's annualized growth by account type/bracket
+    (tax-advantaged / moderate / high -- see taxes.py) and rebalancing
+    frequency (daily/weekly/monthly), at both a short-term-rate
+    assumption (realistic for frequent rebalancing -- see
+    strategies.fixed_crp_log_wealth_path_with_tax's docstring for why
+    this is a scenario choice, not tracked lot-by-lot) and a long-term-
+    rate assumption (an optimistic bound). Tax-advantaged has only one
+    row per frequency since the rate is 0 regardless of holding period.
+
+    Same (mu, sigma, rho) as Phase 3/6's calm regime, for continuity.
+    """
+    n_days = int(horizon_years * TRADING_DAYS_PER_YEAR)
+    X = simulate_correlated_gbm(
+        n_paths, n_days, mu=(base_mu, base_mu), sigma=(base_sigma, base_sigma), rho=base_rho, seed=seed
+    )
+
+    scenarios = [
+        (TAX_ADVANTAGED.name, 0.0),
+        (f"{MODERATE_BRACKET.name}, short-term", MODERATE_BRACKET.short_term_rate),
+        (f"{MODERATE_BRACKET.name}, long-term", MODERATE_BRACKET.long_term_rate),
+        (f"{HIGH_BRACKET.name}, short-term", HIGH_BRACKET.short_term_rate),
+        (f"{HIGH_BRACKET.name}, long-term", HIGH_BRACKET.long_term_rate),
+    ]
+    frequencies = {"daily": 1, "weekly": 5, "monthly": 21}
+
+    rows = []
+    for scenario_name, tax_rate in scenarios:
+        for freq_name, rebalance_every in frequencies.items():
+            log_wealth = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=tax_rate, rebalance_every=rebalance_every)
+            rows.append(
+                {
+                    "scenario": scenario_name,
+                    "tax_rate": tax_rate,
+                    "frequency": freq_name,
+                    "annualized_growth": (log_wealth[:, -1] / n_days * TRADING_DAYS_PER_YEAR).mean(),
+                }
+            )
     return pd.DataFrame(rows)

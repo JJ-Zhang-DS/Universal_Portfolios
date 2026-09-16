@@ -7,6 +7,7 @@ from universal_portfolio.strategies import (
     bcrp_grid,
     fixed_crp_log_wealth,
     fixed_crp_log_wealth_path,
+    fixed_crp_log_wealth_path_with_tax,
     max_drawdown_from_log_wealth_path,
     universal_portfolio_log_wealth,
 )
@@ -246,3 +247,57 @@ def test_fixed_crp_time_varying_cost_only_bites_inside_its_window():
 
     np.testing.assert_allclose(varying[:, :40], free[:, :40], rtol=1e-12)
     assert not np.allclose(varying[:, 40:], free[:, 40:])
+
+
+def test_tax_zero_rate_matches_frictionless_fixed_crp():
+    X = _random_paths(n_paths=20, n_days=150, seed=19)
+    free = fixed_crp_log_wealth_path(X, 0.5)
+    tax_zero = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=0.0)
+    np.testing.assert_allclose(free, tax_zero, rtol=1e-9)
+
+
+def test_tax_matches_hand_computed_two_day_example():
+    """Day 1: asset0 +50%, asset1 flat. Start 50/50 (basis=value=0.5
+    each leg). After the day-1 return: value0=0.75, value1=0.5, total=
+    1.25, target0=0.625 -- leg0 is overweight and gets trimmed by 0.125.
+    realized_basis0 = 0.5 * (0.125/0.75) = 0.041667, so the realized
+    gain is 0.125 - 0.041667 = 0.083333, taxed at 20% = 0.016667 owed,
+    leaving 1.25 - 0.016667 = 1.233333."""
+    X = np.array([[[1.5, 1.0], [1.0, 1.0]]])  # 1 path, 2 days
+    result = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=0.20)
+    day1_wealth = np.exp(result[0, 0])
+    assert day1_wealth == pytest.approx(1.25 - 0.20 * (0.125 - 0.5 * (0.125 / 0.75)), rel=1e-9)
+
+
+def test_tax_reduces_wealth_on_average_over_a_positive_drift_scenario():
+    """Unlike Phase 4's transaction costs (always >= 0, so cost strictly
+    reduces wealth on EVERY path), tax on a realized LOSS is a rebate
+    under this model's full-offset assumption -- an individual path can
+    have net positive drift overall but still realize a loss on some
+    specific rebalance day, in which case that path's taxed wealth can
+    exceed its tax-free wealth (this is literally what tax-loss
+    harvesting exploits). So the invariant that holds is the AVERAGE
+    over many paths, not every single path."""
+    rng = np.random.default_rng(20)
+    X = np.exp(rng.normal(loc=0.0004, scale=0.01, size=(2000, 300, 2)))  # positive drift both legs
+    free = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=0.0)[:, -1]
+    taxed = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=0.35)[:, -1]
+    assert np.mean(free - taxed) > 0
+
+
+def test_tax_less_frequent_rebalancing_defers_more_gain_at_fixed_rate():
+    """Fewer realization events should mean less TOTAL tax paid over the
+    same horizon at a fixed rate -- the tax-drag analogue of Phase 4's
+    cost/frequency finding."""
+    rng = np.random.default_rng(21)
+    X = np.exp(rng.normal(loc=0.0004, scale=0.01, size=(200, 252, 2)))
+    tax_rate = 0.35
+
+    daily_free = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=0.0, rebalance_every=1)[:, -1]
+    daily_taxed = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=tax_rate, rebalance_every=1)[:, -1]
+    monthly_free = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=0.0, rebalance_every=21)[:, -1]
+    monthly_taxed = fixed_crp_log_wealth_path_with_tax(X, 0.5, tax_rate=tax_rate, rebalance_every=21)[:, -1]
+
+    daily_drag = (daily_free - daily_taxed).mean()
+    monthly_drag = (monthly_free - monthly_taxed).mean()
+    assert monthly_drag < daily_drag

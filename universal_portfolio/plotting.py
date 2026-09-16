@@ -482,3 +482,56 @@ def plot_crisis_multiplier_sensitivity(df: pd.DataFrame, path: str) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_tax_drag(df: pd.DataFrame, path: str) -> None:
+    """Two panels (moderate / high bracket), each x=frequency with
+    short-term vs. long-term rate as grouped bars: tax drag vs. the
+    tax-advantaged (IRA/401k) baseline. Scale here is percentage points,
+    not bps -- an order of magnitude larger than Phase 4's spread-cost
+    drag or Phase 6's crisis-cost-widening drag.
+    """
+    freq_order = ["daily", "weekly", "monthly"]
+    advantaged = df[df["scenario"].str.startswith("tax-advantaged")].set_index("frequency")["annualized_growth"]
+
+    def drag_for(prefix: str) -> tuple:
+        short = df[df["scenario"] == f"{prefix}, short-term"].set_index("frequency")["annualized_growth"]
+        long = df[df["scenario"] == f"{prefix}, long-term"].set_index("frequency")["annualized_growth"]
+        return (advantaged - short).loc[freq_order], (advantaged - long).loc[freq_order]
+
+    moderate_short, moderate_long = drag_for("moderate bracket (24% ordinary / 15% LTCG)")
+    high_short, high_long = drag_for("high bracket (37% ordinary + 3.8% NIIT / 20% LTCG + 3.8% NIIT)")
+
+    x = np.arange(len(freq_order))
+    width = 0.32
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5), facecolor=SURFACE, sharey=True)
+
+    for ax, short, long, title in [
+        (ax1, moderate_short, moderate_long, "Moderate bracket\n(24% ordinary / 15% LTCG)"),
+        (ax2, high_short, high_long, "High bracket\n(37%+NIIT ordinary / 20%+NIIT LTCG)"),
+    ]:
+        ax.bar(x - width / 2, short.values * 100, width, color=BLUE, zorder=3)
+        ax.bar(x + width / 2, long.values * 100, width, color=ORANGE, zorder=3)
+        for xi, v in zip(x - width / 2, short.values * 100):
+            ax.annotate(f"{v:.2f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                        ha="center", fontsize=8.5, color=INK_SECONDARY)
+        for xi, v in zip(x + width / 2, long.values * 100):
+            ax.annotate(f"{v:.2f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                        ha="center", fontsize=8.5, color=INK_SECONDARY)
+        ax.set_xticks(x)
+        ax.set_xticklabels(freq_order, fontsize=9, color=INK_SECONDARY)
+        ax.set_title(title, fontsize=10, color=INK_PRIMARY, loc="left")
+        _style_axes(ax)
+
+    ax1.set_ylabel("tax drag vs. tax-advantaged account (pp/yr)", fontsize=9, color=INK_SECONDARY)
+    handles = [plt.Line2D([0], [0], color=BLUE, lw=6), plt.Line2D([0], [0], color=ORANGE, lw=6)]
+    ax1.legend(handles, ["short-term rate", "long-term rate"], loc="upper right", frameon=False,
+               fontsize=9, labelcolor=INK_SECONDARY)
+
+    fig.suptitle(
+        "Taxable-account drag vs. an IRA/401(k), fixed 50/50 CRP",
+        fontsize=11, color=INK_PRIMARY, x=0.01, ha="left", y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)

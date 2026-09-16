@@ -185,3 +185,80 @@ def universal_portfolio_log_wealth(
         log_crp_wealth += np.log(b_grid * x0[:, None] + (1 - b_grid) * x1[:, None])
 
     return log_universal_wealth_path if full_path else log_universal_wealth_path[:, -1]
+
+
+def fixed_crp_log_wealth_path_with_tax(
+    X: np.ndarray, b: float, tax_rate: float = 0.0, rebalance_every: int = 1
+) -> np.ndarray:
+    """Fixed-weight CRP with US capital-gains tax on every rebalancing
+    sale (Phase 7), average-cost-basis method.
+
+    On a rebalance day, whichever leg is overweight gets sold down to
+    target; realized gain/loss = amount_sold - (fraction_of_position_sold
+    * that leg's cost basis). Only one leg is ever sold on a given
+    rebalance (the proceeds fund the other leg's purchase), so exactly
+    one of the two legs' gains is nonzero per rebalance, by construction.
+    The resulting tax is funded by scaling BOTH legs' value AND basis
+    down proportionally -- modeling it as a small pro-rata sale across
+    the whole portfolio, whose OWN embedded gain/loss this function does
+    not recursively re-tax (a deliberate second-order simplification: the
+    point is to capture realization-driven tax drag, not reproduce exact
+    IRS lot accounting). A realized LOSS produces a negative tax (a
+    rebate) -- optimistic versus the real $3,000/yr ordinary-income
+    offset cap with carryforward, since it assumes full offset against
+    other income/gains that year.
+
+    `tax_rate` is a single combined rate per call, not derived from
+    actually tracking each lot's holding period (intractable for a
+    portfolio that trades on every rebalance) -- callers choose a
+    short-term (ordinary-income) or long-term (preferential) rate as a
+    scenario, per taxes.py's TaxScenario. 0 reproduces the frictionless
+    Phase 2/3 behavior exactly (this is also what a tax-advantaged
+    account, e.g. an IRA, looks like -- trades inside it aren't taxable
+    events at all).
+
+    :param X: shape (n_paths, n_days, 2).
+    :returns: log-wealth, shape (n_paths, n_days).
+    """
+    n_paths, n_days, _ = X.shape
+
+    value0 = np.full(n_paths, b)
+    value1 = np.full(n_paths, 1.0 - b)
+    basis0 = np.full(n_paths, b)
+    basis1 = np.full(n_paths, 1.0 - b)
+    log_wealth_path = np.empty((n_paths, n_days))
+
+    for t in range(n_days):
+        x0, x1 = X[:, t, 0], X[:, t, 1]
+        value0 = value0 * x0
+        value1 = value1 * x1  # basis is unaffected by price movement, only by transactions
+
+        if t % rebalance_every == rebalance_every - 1:
+            total = value0 + value1
+            target0 = b * total
+
+            sell0 = np.maximum(value0 - target0, 0.0)
+            buy0 = np.maximum(target0 - value0, 0.0)
+            frac_sold0 = np.where(value0 > 0, sell0 / np.where(value0 > 0, value0, 1.0), 0.0)
+            realized_basis0 = frac_sold0 * basis0
+            gain0 = sell0 - realized_basis0
+
+            sell1 = buy0  # leg 1 is the mirror image: whichever leg isn't sold funds the other's purchase
+            buy1 = sell0
+            frac_sold1 = np.where(value1 > 0, sell1 / np.where(value1 > 0, value1, 1.0), 0.0)
+            realized_basis1 = frac_sold1 * basis1
+            gain1 = sell1 - realized_basis1
+
+            tax_owed = tax_rate * (gain0 + gain1)
+
+            basis0 = basis0 - realized_basis0 + buy0
+            basis1 = basis1 - realized_basis1 + buy1
+            value0, value1 = target0, total - target0
+
+            scale = np.maximum((total - tax_owed) / total, 1e-6)
+            value0, value1 = value0 * scale, value1 * scale
+            basis0, basis1 = basis0 * scale, basis1 * scale
+
+        log_wealth_path[:, t] = np.log(value0 + value1)
+
+    return log_wealth_path
