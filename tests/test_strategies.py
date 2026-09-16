@@ -136,3 +136,81 @@ def test_max_drawdown_is_zero_for_monotonically_increasing_path():
     log_wealth_path = np.log(np.array([[1.0, 1.1, 1.3, 1.3, 1.4]]))
     dd = max_drawdown_from_log_wealth_path(log_wealth_path)
     assert dd[0] == pytest.approx(0.0)
+
+
+def test_fixed_crp_daily_zero_cost_matches_frictionless_fast_path():
+    """rebalance_every=1 (daily) with cost_bps=0 must exactly reproduce the
+    frictionless Phase 2/3 fast-path formula: with a rebalance every single
+    day, the weight is always exactly b, so the day-loop and the direct
+    `b*x0 + (1-b)*x1` formula compute the same thing."""
+    X = _random_paths(n_paths=15, n_days=200, seed=11)
+    frictionless = fixed_crp_log_wealth_path(X, 0.5)
+    zero_cost_daily = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0, rebalance_every=1)
+    np.testing.assert_allclose(zero_cost_daily[:, -1], frictionless[:, -1], rtol=1e-9)
+
+
+def test_fixed_crp_zero_cost_lower_frequency_differs_from_daily():
+    """Rebalancing weekly/monthly is a genuinely different portfolio
+    process from daily, not just a cost saving: between rebalances the
+    weight drifts away from b, so the realized daily return uses a
+    different (drifted) weight than the always-exactly-b daily case. This
+    difference exists even at cost_bps=0 -- confirms rebalance_every
+    changes the underlying strategy, not only its cost."""
+    X = _random_paths(n_paths=15, n_days=200, seed=11)
+    daily = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0, rebalance_every=1)[:, -1]
+    monthly = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0, rebalance_every=21)[:, -1]
+    assert not np.allclose(daily, monthly, rtol=1e-6)
+
+
+def test_fixed_crp_never_rebalancing_matches_two_leg_buy_and_hold():
+    """The limiting case rebalance_every > n_days means the initial 50/50
+    split is never traded again -- equivalent by definition to investing
+    half the initial wealth in each leg and letting both compound
+    independently, which can be computed directly without this module."""
+    X = _random_paths(n_paths=15, n_days=100, seed=15)
+    b = 0.5
+    never_rebalanced = fixed_crp_log_wealth_path(X, b, cost_bps=0.0, rebalance_every=X.shape[1] + 1)
+    final_wealth = np.exp(never_rebalanced[:, -1])
+
+    expected = b * np.cumprod(X[:, :, 0], axis=1)[:, -1] + (1 - b) * np.cumprod(X[:, :, 1], axis=1)[:, -1]
+    np.testing.assert_allclose(final_wealth, expected, rtol=1e-8)
+
+
+def test_fixed_crp_cost_strictly_reduces_wealth():
+    X = _random_paths(n_paths=30, n_days=250, seed=12)
+    free = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0)[:, -1]
+    costed = fixed_crp_log_wealth_path(X, 0.5, cost_bps=10.0)[:, -1]
+    assert np.all(costed <= free + 1e-12)
+    assert np.mean(free - costed) > 0  # cost actually bites, not a no-op
+
+
+def test_universal_portfolio_cost_strictly_reduces_wealth():
+    X = _random_paths(n_paths=30, n_days=250, seed=13)
+    free = universal_portfolio_log_wealth(X, cost_bps=0.0)
+    costed = universal_portfolio_log_wealth(X, cost_bps=10.0)
+    assert np.all(costed <= free + 1e-12)
+    assert np.mean(free - costed) > 0
+
+
+def test_less_frequent_rebalancing_reduces_cost_drag_at_fixed_cost_rate():
+    """At the same per-trade cost rate, rebalancing less often means fewer
+    trades and so less TOTAL cost paid -- this holds by construction
+    (fewer nonzero turnover charges), independent of any market-timing
+    luck. Isolates cost drag from the *structural* daily-vs-monthly
+    difference confirmed in test_fixed_crp_zero_cost_lower_frequency_
+    differs_from_daily by comparing each frequency's costed result against
+    its OWN zero-cost baseline at that same frequency, not a shared one.
+    (Whether less-frequent rebalancing is BETTER net of its own
+    tracking-error cost is a separate, empirical question -- this test
+    only checks the cost-drag mechanism in isolation.)"""
+    X = _random_paths(n_paths=200, n_days=252, seed=14)
+    cost_bps = 20.0  # exaggerated on purpose to make the drag unambiguous
+
+    daily_free = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0, rebalance_every=1)[:, -1]
+    daily_costed = fixed_crp_log_wealth_path(X, 0.5, cost_bps=cost_bps, rebalance_every=1)[:, -1]
+    monthly_free = fixed_crp_log_wealth_path(X, 0.5, cost_bps=0.0, rebalance_every=21)[:, -1]
+    monthly_costed = fixed_crp_log_wealth_path(X, 0.5, cost_bps=cost_bps, rebalance_every=21)[:, -1]
+
+    daily_drag = (daily_free - daily_costed).mean()
+    monthly_drag = (monthly_free - monthly_costed).mean()
+    assert monthly_drag < daily_drag

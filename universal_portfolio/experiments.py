@@ -26,12 +26,22 @@ mid-horizon:
    volatility-only, and a realistic joint crisis where both jump together
    with drift turning negative), each compared against a no-crisis
    counterfactual over the same total horizon.
+
+Phase 4 adds transaction costs, which (1)-(4) ignore entirely:
+
+5. `transaction_cost_sweep` — how much of the rebalancing premium survives
+   real costs? Crosses cost.py's vendor/liquidity-tier spread assumptions
+   (Fidelity vs. a no-price-improvement baseline, mega-liquid ETF vs.
+   single-stock) against rebalancing frequency (daily/weekly/monthly),
+   since less-frequent rebalancing trades fewer times but drifts further
+   from target between trades -- not obviously better or worse a priori.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
+from .costs import spread_cost_bps
 from .simulate import Regime, simulate_correlated_gbm, simulate_regime_switching_gbm
 from .strategies import (
     bcrp_grid,
@@ -217,4 +227,65 @@ def regime_shift_scenarios(
                     "bh_leg_avg_max_drawdown": bh_dd.mean(),
                 }
             )
+    return pd.DataFrame(rows)
+
+
+def transaction_cost_sweep(
+    tier: str = "mega_liquid_etf",
+    base_mu: float = 0.08,
+    base_sigma: float = 0.25,
+    base_rho: float = -0.3,
+    horizon_years: float = 10.0,
+    n_paths: int = 5_000,
+    seed: int = 20,
+) -> pd.DataFrame:
+    """Net-of-cost growth for fixed 50/50 CRP at daily/weekly/monthly
+    rebalancing, under four cost scenarios (frictionless reference,
+    Fidelity, Fidelity single-stock tier, and a no-price-improvement
+    baseline standing in for a lower-execution-quality vendor -- see
+    costs.py for the sourcing), plus Universal Portfolio at daily
+    rebalancing (its target weight changes every day by construction, so
+    "frequency" isn't a separate lever for it the way it is for a fixed
+    CRP).
+
+    Default (mu, sigma, rho) matches Phase 3's calm regime, for
+    continuity with those results.
+    """
+    n_days = int(horizon_years * TRADING_DAYS_PER_YEAR)
+    X = simulate_correlated_gbm(
+        n_paths, n_days, mu=(base_mu, base_mu), sigma=(base_sigma, base_sigma), rho=base_rho, seed=seed
+    )
+
+    cost_scenarios = {
+        "frictionless": 0.0,
+        "fidelity": spread_cost_bps(tier, "fidelity"),
+        "no_price_improvement": spread_cost_bps(tier, "no_price_improvement"),
+    }
+    frequencies = {"daily": 1, "weekly": 5, "monthly": 21}
+
+    rows = []
+    for cost_name, cost_bps in cost_scenarios.items():
+        for freq_name, rebalance_every in frequencies.items():
+            log_wealth = fixed_crp_log_wealth_path(X, 0.5, cost_bps=cost_bps, rebalance_every=rebalance_every)
+            rows.append(
+                {
+                    "strategy": "fixed_50_50",
+                    "cost_scenario": cost_name,
+                    "cost_bps": cost_bps,
+                    "frequency": freq_name,
+                    "annualized_growth": (log_wealth[:, -1] / n_days * TRADING_DAYS_PER_YEAR).mean(),
+                }
+            )
+
+        up_log_wealth = universal_portfolio_log_wealth(X, cost_bps=cost_bps)
+        rows.append(
+            {
+                "strategy": "universal_portfolio",
+                "cost_scenario": cost_name,
+                "cost_bps": cost_bps,
+                "frequency": "daily",
+                "annualized_growth": (up_log_wealth / n_days * TRADING_DAYS_PER_YEAR).mean(),
+            }
+        )
+
     return pd.DataFrame(rows)

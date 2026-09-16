@@ -274,3 +274,57 @@ def plot_regime_shift(df: pd.DataFrame, path: str) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_transaction_costs(df_etf: pd.DataFrame, df_stock: pd.DataFrame, path: str) -> None:
+    """Grouped bars: cost drag (vs. frictionless daily fixed 50/50) by
+    rebalancing frequency, for the Fidelity vs. no-price-improvement
+    vendor scenarios, one panel per liquidity tier. Bars because the
+    x-axis (frequency) is categorical/ordinal, not continuous.
+    """
+    freq_order = ["daily", "weekly", "monthly"]
+
+    def drag_table(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        crp = df[df["strategy"] == "fixed_50_50"].set_index(["cost_scenario", "frequency"])
+        ref = crp.loc[("frictionless", "daily"), "annualized_growth"]
+        fidelity = np.array([ref - crp.loc[("fidelity", f), "annualized_growth"] for f in freq_order])
+        no_pi = np.array([ref - crp.loc[("no_price_improvement", f), "annualized_growth"] for f in freq_order])
+        return fidelity, no_pi
+
+    x = np.arange(len(freq_order))
+    width = 0.32
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), facecolor=SURFACE, sharey=False)
+
+    for ax, df, title in zip(axes, (df_etf, df_stock), ("mega-liquid ETF tier (SPY/QQQ-like)", "single-stock tier")):
+        fidelity, no_pi = drag_table(df)
+
+        ax.bar(x - width / 2, fidelity * 1e4, width, color=BLUE, zorder=3)
+        ax.bar(x + width / 2, no_pi * 1e4, width, color=ORANGE, zorder=3)
+
+        for xi, v in zip(x - width / 2, fidelity * 1e4):
+            ax.annotate(f"{v:.1f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                        ha="center", fontsize=8.5, color=INK_SECONDARY)
+        for xi, v in zip(x + width / 2, no_pi * 1e4):
+            ax.annotate(f"{v:.1f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                        ha="center", fontsize=8.5, color=INK_SECONDARY)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(freq_order, fontsize=9, color=INK_SECONDARY)
+        ax.set_title(title, fontsize=10, color=INK_PRIMARY, loc="left")
+        ax.set_ylabel("cost drag vs. frictionless daily (bps/yr)", fontsize=9, color=INK_SECONDARY)
+        ax.set_ylim(bottom=0)
+        _style_axes(ax)
+
+    fig.suptitle(
+        "Fixed 50/50 CRP: growth given up to costs, by vendor scenario and rebalancing frequency",
+        fontsize=10.5, color=INK_PRIMARY, x=0.01, ha="left", y=1.04,
+    )
+    handles = [plt.Line2D([0], [0], color=BLUE, lw=6), plt.Line2D([0], [0], color=ORANGE, lw=6)]
+    fig.legend(
+        handles, ["Fidelity (disclosed effective spread)", "no price improvement (illustrative)"],
+        loc="upper center", ncol=2, frameon=False, bbox_to_anchor=(0.5, 0.99), fontsize=9, labelcolor=INK_SECONDARY,
+    )
+
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)
