@@ -605,3 +605,54 @@ def plot_rolling_window_summary(df: pd.DataFrame, path: str) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
     plt.close(fig)
+
+
+# Phase 7's synthetic symmetric-drift baseline (calm regime, daily rebalancing,
+# high bracket + short-term rate) -- the number Phase 9 checks real pairs against.
+PHASE_7_SYNTHETIC_BASELINE_PP = 2.24
+
+
+def plot_tax_drag_real_pairs(summary: pd.DataFrame, path: str) -> None:
+    """Two panels: (1) daily tax drag per real pair vs. Phase 7's
+    synthetic symmetric-drift baseline (dashed reference line) -- does a
+    persistent-winner pair realize much more tax than the calm-regime
+    number suggested; (2) how much of that daily drag survives at
+    monthly rebalancing, per pair -- does lower frequency rescue a
+    persistent-winner pair the way it did in Phase 7's synthetic case.
+    """
+    daily = summary[summary["frequency"] == "daily"].set_index("pair")["drag_high_bracket_short_term"]
+    monthly = summary[summary["frequency"] == "monthly"].set_index("pair")["drag_high_bracket_short_term"]
+    pairs = daily.sort_values(ascending=False).index.tolist()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12.5, 5.2), facecolor=SURFACE)
+
+    x = np.arange(len(pairs))
+    ax1.bar(x, (daily.loc[pairs] * 100).values, 0.55, color=BLUE, zorder=3)
+    for xi, v in zip(x, daily.loc[pairs] * 100):
+        ax1.annotate(f"{v:.1f}", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                     ha="center", fontsize=8.5, color=INK_SECONDARY)
+    ax1.axhline(PHASE_7_SYNTHETIC_BASELINE_PP, color=BASELINE, linewidth=1.2, linestyle=(0, (3, 2)))
+    ax1.annotate(f"Phase 7 synthetic baseline: {PHASE_7_SYNTHETIC_BASELINE_PP:.2f}pp",
+                 xy=(1.5, PHASE_7_SYNTHETIC_BASELINE_PP), xytext=(0, 5),
+                 textcoords="offset points", fontsize=8, color=INK_MUTED, ha="center")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(pairs, fontsize=8.5, color=INK_SECONDARY, rotation=30, ha="right")
+    ax1.set_title("Daily tax drag, real pairs\n(high bracket, short-term rate)", fontsize=10, color=INK_PRIMARY, loc="left")
+    ax1.set_ylabel("tax drag vs. tax-advantaged (pp/yr)", fontsize=9, color=INK_SECONDARY)
+    _style_axes(ax1)
+
+    pct_remaining = (monthly.loc[pairs] / daily.loc[pairs] * 100)
+    ax2.bar(x, pct_remaining.values, 0.55, color=ORANGE, zorder=3)
+    for xi, v in zip(x, pct_remaining):
+        ax2.annotate(f"{v:.0f}%", xy=(xi, v), xytext=(0, 3), textcoords="offset points",
+                     ha="center", fontsize=8.5, color=INK_SECONDARY)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(pairs, fontsize=8.5, color=INK_SECONDARY, rotation=30, ha="right")
+    ax2.set_ylim(0, 100)
+    ax2.set_title("Monthly drag as % of daily drag\n(how much rebalancing less often actually helps)", fontsize=10, color=INK_PRIMARY, loc="left")
+    ax2.set_ylabel("% of daily drag remaining", fontsize=9, color=INK_SECONDARY)
+    _style_axes(ax2)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, facecolor=SURFACE, bbox_inches="tight")
+    plt.close(fig)

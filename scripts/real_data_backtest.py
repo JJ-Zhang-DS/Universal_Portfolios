@@ -1,5 +1,5 @@
-"""Phases 5 and 8: modern out-of-sample and rolling-window robustness
-checks on real historical price data.
+"""Phases 5, 8, and 9: modern out-of-sample, rolling-window robustness,
+and real-pair tax drag, all on real historical price data.
 
     python -m scripts.real_data_backtest [--out-dir results] [--refresh]
 
@@ -8,8 +8,11 @@ TLT, NVDA, TSLA, AMD, MSFT, GOOG, ISRG, WM, backtests fixed 50/50 CRP /
 BCRP / Universal Portfolio (frictionless and Fidelity-costed) on each
 configured pair over the full period (Phase 5) and over rolling 3-year
 sub-windows (Phase 8, checking how much the full-period numbers depend
-on this specific decade), and plots the rolling QQQ/TLT and WM/TSLA
-correlation against the 2020 and 2022 crisis windows.
+on this specific decade), plots the rolling QQQ/TLT and WM/TSLA
+correlation against the 2020 and 2022 crisis windows, and applies Phase
+7's tax model to these same real pairs (Phase 9, checking whether a
+persistent-winner pair realizes much more tax than Phase 7's synthetic
+symmetric-drift baseline suggested).
 
 Unlike Phases 2-4, each pair here is ONE realized historical path, not a
 Monte Carlo average -- see universal_portfolio/real_data_experiments.py's
@@ -28,12 +31,15 @@ from universal_portfolio.plotting import (
     plot_rolling_correlation,
     plot_rolling_window_summary,
     plot_rolling_window_timeseries,
+    plot_tax_drag_real_pairs,
 )
 from universal_portfolio.real_data_experiments import (
     backtest_all_pairs,
     rolling_correlation,
     rolling_window_backtest,
     rolling_window_summary,
+    tax_drag_on_real_pairs,
+    tax_drag_summary,
 )
 
 pd.set_option("display.width", 200)
@@ -87,6 +93,17 @@ def main() -> None:
         os.path.join(args.out_dir, "exp9_rolling_window_timeseries.png"),
     )
     plot_rolling_window_summary(summary, os.path.join(args.out_dir, "exp9_rolling_window_summary.png"))
+
+    print()
+    print("=" * 70)
+    print("Experiment 9: tax drag on real pairs vs. Phase 7's synthetic baseline")
+    print("=" * 70)
+    tax_df = tax_drag_on_real_pairs()
+    tax_summary = tax_drag_summary(tax_df)
+    print(tax_summary.to_string(index=False))
+    tax_df.to_csv(os.path.join(args.out_dir, "exp10_tax_drag_real_pairs.csv"), index=False)
+    tax_summary.to_csv(os.path.join(args.out_dir, "exp10_tax_drag_real_pairs_summary.csv"), index=False)
+    plot_tax_drag_real_pairs(tax_summary, os.path.join(args.out_dir, "exp10_tax_drag_real_pairs.png"))
 
     print()
     print(f"CSV and charts written to {args.out_dir}/")

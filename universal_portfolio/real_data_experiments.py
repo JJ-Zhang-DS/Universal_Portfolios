@@ -15,6 +15,15 @@ negative controls) vs. cross-sector pairs anchored by WM (Waste
 Management: low vol, low correlation to growth/tech -- about as boring
 and diversifying a stock as exists in the US market) vs. the "classic"
 equity+gold / equity+duration ETF pairs.
+
+Phase 8 adds rolling-window robustness checks (see rolling_window_backtest
+below). Phase 9 adds Phase 7's tax model, applied to these same real
+pairs instead of Phase 7's synthetic symmetric-drift GBM baseline (see
+tax_drag_on_real_pairs) -- testing whether a persistent-winner pair
+(Phase 5/8 flagged WM/AMD and NVDA/AMD as spending most of their history
+in exactly that dynamic) realizes much more tax than the calm baseline,
+since trimming the winner back to target realizes a gain nearly every
+rebalance.
 """
 from __future__ import annotations
 
@@ -27,9 +36,11 @@ from .strategies import (
     bcrp_grid,
     buy_and_hold_log_wealth,
     fixed_crp_log_wealth_path,
+    fixed_crp_log_wealth_path_with_tax,
     max_drawdown_from_log_wealth_path,
     universal_portfolio_log_wealth,
 )
+from .taxes import HIGH_BRACKET, MODERATE_BRACKET, TAX_ADVANTAGED
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -172,3 +183,65 @@ def rolling_window_summary(df: pd.DataFrame, full_period: pd.DataFrame) -> pd.Da
             }
         )
     return pd.DataFrame(rows).set_index("pair").loc[[p for p in full.index if p in df["pair"].unique()]].reset_index()
+
+
+def tax_drag_on_real_pairs(pairs=PAIRS, frequencies=None) -> pd.DataFrame:
+    """Phase 9: Phase 7's tax model (fixed_crp_log_wealth_path_with_tax),
+    applied to real historical pairs over their full available history
+    instead of Phase 7's synthetic symmetric-drift GBM baseline.
+
+    Phase 7 assumed mu1 == mu2 (no persistent winner). Phase 5/8 showed
+    several of these real pairs spend most of their history with exactly
+    that asymmetry (WM/AMD, NVDA/AMD both realized deeply negative
+    excess-vs-better-leg in most rolling windows -- the fixed-weight
+    portfolio was persistently trimming a winner). Trimming a winner
+    realizes a gain almost every time, so tax drag on those pairs should
+    run well above Phase 7's calm-regime numbers -- this checks that
+    directly rather than assuming it.
+    """
+    if frequencies is None:
+        frequencies = {"daily": 1, "weekly": 5, "monthly": 21}
+
+    prices = price_relatives()
+    scenarios = [
+        (TAX_ADVANTAGED.name, 0.0),
+        (f"{MODERATE_BRACKET.name}, short-term", MODERATE_BRACKET.short_term_rate),
+        (f"{MODERATE_BRACKET.name}, long-term", MODERATE_BRACKET.long_term_rate),
+        (f"{HIGH_BRACKET.name}, short-term", HIGH_BRACKET.short_term_rate),
+        (f"{HIGH_BRACKET.name}, long-term", HIGH_BRACKET.long_term_rate),
+    ]
+
+    rows = []
+    for t0, t1 in pairs:
+        X = prices[[t0, t1]].to_numpy()[None, :, :]
+        n_days = X.shape[1]
+        for scenario_name, tax_rate in scenarios:
+            for freq_name, rebalance_every in frequencies.items():
+                log_wealth = fixed_crp_log_wealth_path_with_tax(
+                    X, 0.5, tax_rate=tax_rate, rebalance_every=rebalance_every
+                )
+                rows.append(
+                    {
+                        "pair": f"{t0}/{t1}",
+                        "scenario": scenario_name,
+                        "tax_rate": tax_rate,
+                        "frequency": freq_name,
+                        "annualized_growth": log_wealth[0, -1] / n_days * TRADING_DAYS_PER_YEAR,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def tax_drag_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-pair, per-frequency: tax drag vs. the tax-advantaged (0-rate)
+    baseline, at the high-bracket short-term rate -- the realistic case
+    for frequent rebalancing (see strategies.fixed_crp_log_wealth_path_
+    with_tax's docstring) and the scenario most exposed to a persistent
+    winner's repeatedly-realized gains.
+    """
+    advantaged = df[df["scenario"] == TAX_ADVANTAGED.name].set_index(["pair", "frequency"])["annualized_growth"]
+    taxed = df[df["scenario"] == f"{HIGH_BRACKET.name}, short-term"].set_index(["pair", "frequency"])[
+        "annualized_growth"
+    ]
+    drag = (advantaged - taxed).rename("drag_high_bracket_short_term")
+    return drag.reset_index()

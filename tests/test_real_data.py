@@ -15,7 +15,10 @@ from universal_portfolio.real_data_experiments import (
     rolling_correlation,
     rolling_window_backtest,
     rolling_window_summary,
+    tax_drag_on_real_pairs,
+    tax_drag_summary,
 )
+from universal_portfolio.taxes import HIGH_BRACKET, MODERATE_BRACKET, TAX_ADVANTAGED
 
 
 @pytest.fixture(scope="module")
@@ -113,3 +116,48 @@ def test_rolling_window_summary_matches_manual_calculation(prices):
     assert row["full_period_excess_vs_better_leg"] == pytest.approx(
         full.set_index("pair").loc[pair_label, "excess_vs_better_leg"]
     )
+
+
+def test_tax_drag_on_real_pairs_output_is_internally_consistent(prices):
+    """Reuses Phase 7's tax-aware strategy function on real data instead
+    of synthetic GBM -- the same invariants that held there must hold
+    here: zero-rate is the tax-advantaged baseline, and every taxed
+    scenario should show LESS growth than it at daily frequency (real
+    pairs here have strong enough positive drift, driven by their
+    winning leg, that tax should bite on net despite the loss-rebate
+    mechanism noted in test_strategies.py)."""
+    one_pair = [("SPY", "GLD")]
+    df = tax_drag_on_real_pairs(pairs=one_pair, frequencies={"daily": 1})
+
+    advantaged = df[df["scenario"] == TAX_ADVANTAGED.name]["annualized_growth"].iloc[0]
+    for scenario_name in [
+        f"{MODERATE_BRACKET.name}, short-term",
+        f"{MODERATE_BRACKET.name}, long-term",
+        f"{HIGH_BRACKET.name}, short-term",
+        f"{HIGH_BRACKET.name}, long-term",
+    ]:
+        taxed = df[df["scenario"] == scenario_name]["annualized_growth"].iloc[0]
+        assert taxed < advantaged
+
+    # short-term rate must drag more than long-term, at the same bracket
+    moderate_short = df[df["scenario"] == f"{MODERATE_BRACKET.name}, short-term"]["annualized_growth"].iloc[0]
+    moderate_long = df[df["scenario"] == f"{MODERATE_BRACKET.name}, long-term"]["annualized_growth"].iloc[0]
+    assert moderate_short < moderate_long
+
+
+def test_tax_drag_summary_matches_manual_calculation(prices):
+    one_pair = [("SPY", "GLD")]
+    df = tax_drag_on_real_pairs(pairs=one_pair, frequencies={"daily": 1, "monthly": 21})
+    summary = tax_drag_summary(df)
+
+    assert len(summary) == 2  # one row per (pair, frequency)
+    for _, row in summary.iterrows():
+        sub = df[df["frequency"] == row["frequency"]]
+        advantaged = sub[sub["scenario"] == TAX_ADVANTAGED.name]["annualized_growth"].iloc[0]
+        taxed = sub[sub["scenario"] == f"{HIGH_BRACKET.name}, short-term"]["annualized_growth"].iloc[0]
+        assert row["drag_high_bracket_short_term"] == pytest.approx(advantaged - taxed)
+
+    # less-frequent rebalancing must defer at least some gain, same direction as Phase 7's synthetic finding
+    daily_drag = summary[summary["frequency"] == "daily"]["drag_high_bracket_short_term"].iloc[0]
+    monthly_drag = summary[summary["frequency"] == "monthly"]["drag_high_bracket_short_term"].iloc[0]
+    assert monthly_drag < daily_drag
