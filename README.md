@@ -12,6 +12,70 @@ provably tracks the best CRP in hindsight asymptotically, without
 look-ahead. This is a different problem class from single-asset return
 forecasting; there is no "features" or "model training" step.
 
+## Methodology
+
+Four-stage arc, each stage's output feeding the next:
+
+1. **Theory** (Phase 1) — replicate Cover's own published numbers on his own
+   historical dataset, single path, no simulation, to establish a
+   known-correct reference implementation before trusting it on anything else.
+2. **Controlled simulation** (Phases 2-3) — vectorized Monte Carlo on
+   correlated-GBM paths (`n_paths` up to 20,000), first at constant
+   parameters to validate the closed-form rebalancing-premium formula
+   against simulation, then with parameters that shift mid-path
+   (regime-switching) to stress-test it under crisis-like conditions.
+3. **Frictions** (Phases 4, 6, 7) — layer real-world costs onto the same
+   simulation: sourced vendor transaction costs (Phase 4), cost widening
+   under the crisis regime from stage 2 (Phase 6), and realized-gain tax
+   drag under an explicit account-type/bracket/frequency model (Phase 7).
+4. **Real data** (Phases 5, 8, 9) — replace simulated paths with actual
+   2016-2026 daily prices for 11 tickers, re-running the *same* strategy
+   functions built in stages 1-3 (not a separate implementation) on realized
+   history: one full-period backtest per pair (Phase 5), then a rolling
+   3-year-window version to check whether the full-period read is robust or
+   an artifact of this one decade (Phase 8), then Phase 7's tax model
+   applied to these same real pairs instead of synthetic data (Phase 9).
+
+Engineering discipline held constant across all nine phases:
+
+- **Log-wealth space throughout** — avoids overflow/underflow at 20-year
+  horizons and 60%+ annualized volatility.
+- **Vectorized across paths**, never a per-path Python loop — `n_paths` up
+  to 20,000 in a single array operation.
+- **Algebraic-identity tests before empirical ones** — e.g. `BCRP ≥
+  Universal Portfolio` and `universal wealth == mean(CRP wealth)` are true
+  *by construction*; a test on these catches indexing/look-ahead bugs that
+  a purely numerical tolerance check would miss.
+- **Common random numbers** for every before/after comparison (Phases 3, 6)
+  — same seed on both sides, so the only thing that differs is the one
+  parameter being tested, not Monte Carlo noise.
+- **A suspiciously good result is a bug signal, not a win** — restated
+  explicitly at every phase boundary; Phase 8 is the one case where this
+  discipline actually caught something (a full-period result that reversed
+  under robustness testing — see below).
+
+## Results at a glance
+
+Two findings matter most, established early and confirmed at every later stage:
+
+1. **"Beats the average of the two legs" (what the theory guarantees) and
+   "beats the better of the two legs" (what an investor actually cares
+   about) are different bars — rebalancing routinely clears the first while
+   failing the second.** True on synthetic data (Phase 2: positive excess
+   vs. the average leg in 24/24 tested (σ,ρ) combinations, but below 50%
+   win probability against the better leg in 22/24) and on real data
+   (Phases 5/8: negative excess vs. the better leg in most pairs and most
+   rolling windows, even for genuinely low-correlation pairs like QQQ/TLT).
+2. **Tax drag dwarfs every other modeled friction by 1-2 orders of magnitude:**
+
+   | Friction | Magnitude | Source |
+   |---|---:|---|
+   | Transaction costs (Fidelity, ETF / single-stock) | 0.004%–0.05%/yr | Phase 4 |
+   | Crisis-widened spreads | 0.0004%–0.24%/yr | Phase 6 |
+   | **Tax drag** (real pairs, high bracket, daily rebalancing) | **1.3%–13.4%/yr** | Phases 7, 9 |
+
+Method and full numbers behind both are in the phase sections below, with charts embedded inline where they were generated (`docs/images/`; regenerate anytime via the `scripts/` commands — the checked-in copies are what GitHub renders here, `results/` itself is gitignored scratch output).
+
 ## Status: Phase 1 — replication (done)
 
 Cover's Table 8.1 (Iroquois Brands vs. Kin Ark, NYSE, 1962-07-03 to
@@ -77,6 +141,8 @@ at the highest-vol/most-negative-correlation corner). This is the
 rigorous version of the "rebalancing premium ≠ beats the winner" caveat
 from Phase 1.
 
+![Phase 2: realized rebalancing premium vs. the ¼σ²(1−ρ) closed-form prediction, across the σ×ρ sweep](docs/images/phase2_rebalancing_premium_vs_theory.png)
+
 **2. Drift-difference falsification** (σ=40% both legs, ρ=0, `n_paths=5,000`,
 10y horizon): as the annualized drift gap between the two assets widens
 from 0% to 20%, fixed 50/50 CRP's growth rate stays flat (≈2.1%/yr — a
@@ -89,10 +155,14 @@ tracks the winner somewhat better than blind 50/50 (3.5%/yr vs. 2.1%/yr
 at the widest gap) but comes nowhere near BCRP's hindsight number
 (10.1%/yr) — exactly the gap Phase 3 (regret) explains.
 
+![Phase 2: as the drift gap between the two legs widens, fixed 50/50 CRP's growth stays flat while the winner leg pulls away](docs/images/phase2_drift_difference.png)
+
 **3. Horizon convergence**: Cover's regret `R_T = (BCRP − UP) log-wealth / T`
 at σ=40%, ρ=0, `n_paths=5,000` — 0.00074 (1y) → 0.00027 (5y) → 0.00016
 (10y) → 0.00010 (20y). Monotonically shrinking, consistent with Cover's
 asymptotic (not finite-sample) guarantee.
+
+![Phase 2: Cover's regret shrinking monotonically with horizon, consistent with the asymptotic (not finite-sample) guarantee](docs/images/phase2_horizon_convergence.png)
 
 ## Status: Phase 3 — regime-shift stress tests (done)
 
@@ -110,6 +180,8 @@ definitions, `n_paths=5,000`:
 | Correlation only (ρ: −0.3→0.95) | **−4.2%** | −0.1% | −0.3% | −0.0% |
 | Volatility only (σ: 25%→55%) | −8.3% | −9.4% | −0.5% | **−1.4%** |
 | Joint crisis (ρ,σ↑, μ turns negative) | **−28.8%** | −15.7% | −5.3% | −5.1% |
+
+![Phase 3: drawdown and growth impact of splicing a crisis regime into an otherwise-calm horizon, vs. a same-seed no-crisis counterfactual](docs/images/phase3_regime_shift.png)
 
 Two findings that directly qualify Phase 2's results:
 
@@ -173,6 +245,8 @@ matching Phase 3, 10y horizon:
 
 (drag = frictionless-daily annualized growth minus the costed scenario's)
 
+![Phase 4: annualized cost drag by liquidity tier, vendor, and rebalancing frequency](docs/images/phase4_transaction_costs.png)
+
 **The answer to the original concern**: for SPY/QQQ-tier liquidity at
 Fidelity, the bid-ask spread is real but small enough to be a non-issue
 for daily rebalancing — under 1bp/year, trivial next to Phase 2's
@@ -226,6 +300,8 @@ story:
 | WM / AMD | 0.13 | 19% / 59% |
 | ISRG / WM | 0.36 | 32% / 19% |
 
+![Phase 5: buy & hold vs. fixed 50/50 CRP vs. BCRP vs. Universal Portfolio, realized growth on each real-data pair](docs/images/phase5_real_pairs.png)
+
 **1. The ¼σ²(1−ρ) formula survives contact with real, non-lognormal,
 autocorrelated market data** — realized excess-vs-average-leg tracks the
 theoretical prediction within ~10% for 5 of 7 pairs (e.g. SPY/GLD:
@@ -262,6 +338,8 @@ crisis breaks a diversifying pair depends on the crisis's cause, not just
 its existence** — a real refinement Phase 3's single "crisis regime"
 couldn't show.
 
+![Phase 5: 60-day rolling correlation for QQQ/TLT and WM/TSLA, with the 2020 and 2022 crisis windows highlighted](docs/images/phase5_rolling_correlation.png)
+
 ## Status: Phase 6 — crisis-regime cost interaction (done)
 
 Phase 4's cost model and Phase 3's crisis regime were built independently
@@ -280,6 +358,8 @@ the spread 3x wider *only* during the crisis window, `n_paths=5,000`:
 | single stock | daily | 0.24 bps/yr |
 | single stock | monthly | 0.05 bps/yr |
 
+![Phase 6: how much Phase 4's constant-spread assumption understates true cost once the spread widens 3x during the crisis window](docs/images/phase6_crisis_cost_interaction.png)
+
 **The understatement is real and directionally as expected (worse at
 higher frequency, worse for less-liquid tiers) but small in absolute
 terms** — a quarter of a bp per year at worst. The reason: the crisis
@@ -290,6 +370,8 @@ this isn't fragile to that stylized assumption — even at 10x, single-
 stock drag only reaches 3.5bps/yr, mega-liquid-ETF drag 0.5bps/yr, both
 still trivial next to Phase 2's rebalancing premiums and Phase 3's
 drawdown findings.
+
+![Phase 6: cost-drag sensitivity to the crisis spread-widening multiplier, from 1x (no widening) to 10x](docs/images/phase6_crisis_multiplier_sensitivity.png)
 
 **This closes Phase 4's flagged gap with an actual number, and the
 number says the gap doesn't matter much.** Phase 3's real crisis risk —
@@ -340,6 +422,8 @@ Phase 3/6's calm regime:
 
 (drag = tax-advantaged growth minus the taxable scenario's; **percentage
 points**, not basis points — note the unit change from Phases 4 and 6)
+
+![Phase 7: annualized tax drag by bracket, holding-period assumption, and rebalancing frequency, synthetic symmetric-drift data](docs/images/phase7_tax_drag.png)
 
 **This is an order of magnitude larger than every other friction this
 repo has modeled.** Phase 4's bid-ask spread cost daily rebalancing at
@@ -392,6 +476,8 @@ one window.
 | **MSFT/GOOG** | **+0.2pp (positive)** | **3%** | **−2.9pp** |
 | QQQ/TLT | −8.6pp | 1% | −8.8pp |
 
+![Phase 8: full-period excess vs. the better leg against the distribution of excess across 93 rolling 3-year windows, per pair](docs/images/phase8_rolling_window_summary.png)
+
 **The finding is not just confirmed, it's sharpened, and one part of
 Phase 5's read needs correcting.** Every single pair's MEDIAN rolling-
 window result is negative, and no pair beats the better leg in a
@@ -412,6 +498,8 @@ negative (often below −15pp), and only turns positive in the handful of
 number landed in exactly that narrow favorable tail. QQQ/TLT, by
 contrast, is consistently negative across nearly the entire decade —
 that finding was never fragile to begin with, and this confirms it.
+
+![Phase 8: rolling 3-year excess vs. the better leg over time, for NVDA/AMD, QQQ/TLT, and ISRG/WM](docs/images/phase8_rolling_window_timeseries.png)
 
 **Practical upshot**: don't trust a single full-period backtest for a
 pair-rebalancing decision, even a real, honestly-computed one — check
@@ -440,6 +528,8 @@ than assuming it does:
 | ISRG/WM | 5.7 pp/yr | 2.5x | 59% |
 | SPY/GLD | 4.0 pp/yr | 1.8x | 47% |
 | QQQ/TLT | 2.9 pp/yr | 1.3x | 68% |
+
+![Phase 9: real-pair daily tax drag vs. Phase 7's synthetic symmetric-drift baseline](docs/images/phase9_tax_drag_real_pairs.png)
 
 **Every real pair exceeds Phase 7's synthetic baseline — even SPY/GLD,
 the "boring" ETF pair, runs 1.8x higher.** But the two pairs Phase 8
@@ -477,6 +567,7 @@ starting point is high enough that it doesn't get you back to "small."
 - `tests/test_cover_replication.py` — Phase 1 tests: exact-number replication, the `universal wealth == mean(CRP wealth)` algebraic identity (true by construction, so it's what actually catches indexing/look-ahead bugs), a cross-check against `universal-portfolios`' own BCRP optimizer.
 - `tests/test_strategies.py` — Phase 2-4, 6, 7 tests: batched implementation vs. Phase 1's single-path reference, the same algebraic identity batched, `BCRP ≥ Universal Portfolio` always (also algebraic, not empirical), GBM simulator calibration (including per-regime calibration), drawdown correctness on hand-constructed paths, Phase 4's cost/frequency mechanics (including a caught-by-testing subtlety: rebalancing frequency changes the underlying wealth process even at zero cost, since the weight drifts between rebalances — cost and "structural" frequency effects had to be tested separately, not conflated), Phase 6's array-valued cost (a constant array must reproduce the scalar exactly; a cost confined to a sub-window must leave the path untouched before that window starts), and Phase 7's tax mechanics (a hand-computed 2-day example verifying the realized-gain arithmetic; a caught-by-testing subtlety of its own — unlike Phase 4's cost, which is always >=0, a realized LOSS gives a tax rebate under this model's full-offset assumption, so "tax reduces wealth" only holds on AVERAGE across paths, not on every individual path, and the test had to be corrected to check the mean, not `np.all`).
 - `tests/test_real_data.py` — Phase 5 tests: sane price-relative bounds (loose on purpose — AMD alone had a real +52%/-24% single day in this window), BCRP ≥ fixed CRP and costed ≤ frictionless on real data, theory-vs-reality direction/scale, rolling correlation stays in [-1, 1]. Needs a local cache or network access; skips (doesn't fail) if neither is available, since Phase 5 is inherently network-dependent in a way Phases 1-4 aren't. Phase 8 tests: rolling-window mechanics (one row per window per pair, correct window length, per-window internal consistency) and that the summary's aggregates match recomputing them directly from the raw rolling output. Phase 9 tests: real-pair tax drag is internally consistent (zero-rate baseline, every taxed scenario below it, short-term drags more than long-term at the same bracket) and the summary matches manual recomputation.
+- `docs/images/` — checked-in copies of the charts embedded above, one per experiment, named `phaseN_<experiment>.png`. Regenerated by the `scripts/` commands into `results/` (gitignored — treat as scratch); when a chart changes, re-copy the relevant file from `results/` into `docs/images/` so the README stays in sync.
 
 ## Planned next phases
 
