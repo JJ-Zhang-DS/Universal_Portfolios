@@ -1,16 +1,24 @@
 # Universal Portfolios
 
-Research replication of Thomas Cover's 1991 "Universal Portfolios" algorithm
-(*Mathematical Finance* 1(1), 1991), triggered by a viral social-media post
-that conflated the paper's hindsight-optimal benchmark with its actual
-online algorithm. Full analysis: https://chatgpt.com/share/6aa97f61-57ac-83ea-8cff-fb3002fb59f2
+Research replication and stress test of Thomas Cover's 1991 **Universal Portfolio** algorithm.
 
-Universal Portfolio is a **model-free, multi-asset weight-allocation**
-algorithm — it does not predict returns. It maintains a wealth-weighted
-mixture over a grid of candidate constant-rebalanced portfolios (CRPs) and
-provably tracks the best CRP in hindsight asymptotically, without
-look-ahead. This is a different problem class from single-asset return
-forecasting; there is no "features" or "model training" step.
+Universal Portfolio is a model-free allocation method: it maintains a wealth-weighted mixture of candidate constant-rebalanced portfolios (CRPs), using no look-ahead and no return-prediction model.
+
+## Start here
+
+The conceptual introduction is now a standalone subproject:
+
+### [Subproject 1 — Universal Portfolio introduction](projects/01_introduction/README.md)
+
+It explains:
+
+- CRP, BCRP, and Universal Portfolio;
+- historical-wealth weighting;
+- the discrete and continuous formulas;
+- why Cover's 73.62× BCRP is a hindsight benchmark while the online UP achieved 38.67×;
+- and the questions tested by the simulations: volatility, correlation, drift, horizon, regime shifts, costs, taxes, and rolling-window robustness.
+
+The sections below document the implementation and phase-by-phase results.
 
 ## Methodology
 
