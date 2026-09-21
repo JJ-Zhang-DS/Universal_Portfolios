@@ -8,9 +8,9 @@ UP is a **model-free, multi-asset allocation algorithm**. It does not predict re
 
 ## 1. Constant-rebalanced portfolios (CRPs)
 
-For two assets, let \(b\in[0,1]\) be the allocation to asset A; \(1-b\) goes to asset B. Each value of \(b\) defines a **constant-rebalanced portfolio (CRP)**.
+For two assets, let $b\in[0,1]$ be the allocation to asset A; $1-b$ goes to asset B. Each value of $b$ defines a **constant-rebalanced portfolio (CRP)**.
 
-| \(b\) | Allocation |
+| $b$ | Allocation |
 |---:|---|
 | 0.00 | 0% A / 100% B |
 | 0.25 | 25% A / 75% B |
@@ -18,38 +18,38 @@ For two assets, let \(b\in[0,1]\) be the allocation to asset A; \(1-b\) goes to 
 | 0.75 | 75% A / 25% B |
 | 1.00 | 100% A / 0% B |
 
-A CRP restores its target weights after every period. If period-\(t\) gross returns are \(x_{t,A}\) and \(x_{t,B}\), candidate \(b\)'s wealth evolves as
+A CRP restores its target weights after every period. If period-$t$ gross returns are $x_{t,A}$ and $x_{t,B}$, candidate $b$'s wealth evolves as
 
-\[
+$
 S_t(b)=S_{t-1}(b)\left[b x_{t,A}+(1-b)x_{t,B}\right],
 \qquad S_0(b)=1.
-\]
+$
 
 ## 2. Historical-wealth weighting
 
 UP does not simply choose yesterday's winning candidate. It combines **all** candidates, with influence proportional to the wealth each has accumulated through the previous period.
 
-For a discrete grid \(b_1,\ldots,b_m\),
+For a discrete grid $b_1,\ldots,b_m$,
 
-\[
+$
 p_t(b_j)=\frac{S_{t-1}(b_j)}
 {\sum_{k=1}^{m}S_{t-1}(b_k)}
-\]
+$
 
 and today's allocation to A is
 
-\[
+$
 \hat b_t=\sum_{j=1}^{m}p_t(b_j)b_j
 =
 \frac{\sum_{j=1}^{m} b_j S_{t-1}(b_j)}
 {\sum_{j=1}^{m} S_{t-1}(b_j)}.
-\]
+$
 
 ### Small example
 
 Suppose five candidate CRPs have this wealth at the end of yesterday:
 
-| A weight \(b\) | Wealth \(S_{t-1}(b)\) | Wealth share |
+| A weight $b$ | Wealth $S_{t-1}(b)$ | Wealth share |
 |---:|---:|---:|
 | 0.00 | 1.0 | 10% |
 | 0.25 | 1.5 | 15% |
@@ -59,35 +59,35 @@ Suppose five candidate CRPs have this wealth at the end of yesterday:
 
 Their total wealth is 10, so
 
-\[
+$
 \hat b_t
 =0(0.10)+0.25(0.15)+0.50(0.20)+0.75(0.30)+1(0.25)
 =0.6125.
-\]
+$
 
 UP therefore holds **61.25% A and 38.75% B**. Historically successful CRPs have more influence, but the process is not winner-takes-all.
 
 ## 3. Cover's continuous formulation
 
-Cover's original two-asset formulation averages over every \(b\in[0,1]\), not only a finite grid:
+Cover's original two-asset formulation averages over every $b\in[0,1]$, not only a finite grid:
 
-\[
+$
 \hat b_t=
 \frac{\int_0^1 b\,S_{t-1}(b)\,db}
 {\int_0^1 S_{t-1}(b)\,db}.
-\]
+$
 
-Because every candidate begins with the same wealth, \(S_0(b)=1\), the first allocation is
+Because every candidate begins with the same wealth, $S_0(b)=1$, the first allocation is
 
-\[
+$
 \hat b_1=
 \frac{\int_0^1 b\,db}{\int_0^1 1\,db}
 =\frac12.
-\]
+$
 
 Thus two-asset UP starts at 50/50 and adapts as candidate CRPs accumulate different wealth.
 
-For more than two assets, \(b\) becomes a vector on the portfolio simplex. The same wealth-weighting principle applies.
+For more than two assets, $b$ becomes a vector on the portfolio simplex. The same wealth-weighting principle applies.
 
 ## 4. CRP, BCRP, and UP are different
 
